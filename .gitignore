@@ -4,3 +4,13 @@ worker-dist/
 .wrangler/
 .DS_Store
 *.log
+
+# release manifests hold the APK URL/hash, generated per build
+.release-env/
+
+# Native Android build output; regenerate with `npx expo prebuild`
+mobile/android/
+mobile/.expo/
+
+# Local build artefacts (the published APK lives on the GitHub release)
+artifacts/*.apk

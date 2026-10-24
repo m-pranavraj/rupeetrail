@@ -55,6 +55,16 @@ export interface Env {
   ASSETS?: { fetch(request: Request): Promise<Response> }
   REALTIME?: DurableObjectNamespace
   APP_ORIGIN?: string
+  /* Published Android build, read by the in-app update check. */
+  ANDROID_VERSION_CODE?: string
+  ANDROID_VERSION_NAME?: string
+  ANDROID_APK_URL?: string
+  ANDROID_APK_SHA256?: string
+  ANDROID_APK_SIZE?: string
+  ANDROID_MIN_CODE?: string
+  ANDROID_RELEASE_NOTES?: string
+  /** One JSON blob covering every field above; wins when present. */
+  ANDROID_RELEASE_JSON?: string
 }
 
 /* ------------------------------------------------------------------ *
@@ -872,6 +882,76 @@ async function removeMember(
   return json(snapshot(doc, revision, auth.me))
 }
 
+/**
+ * The Android update manifest.
+ *
+ * Values come from Worker environment variables so publishing a build is a
+ * config change, not a code change. With no URL configured the app simply never
+ * sees an update, which is the correct behaviour before the first release.
+ */
+function releaseManifest(env: Env, url: URL): Response {
+  const current = Number(url.searchParams.get('currentCode') ?? '0') || 0
+
+  // A single JSON value keeps the whole manifest in one place (one secret or
+  // one variable), while the individual names stay supported for local dev.
+  if (env.ANDROID_RELEASE_JSON) {
+    try {
+      const parsed = JSON.parse(env.ANDROID_RELEASE_JSON) as {
+        versionCode?: number
+        versionName?: string
+        apkUrl?: string
+        sha256?: string
+        sizeBytes?: number
+        notes?: string
+        minSupportedCode?: number
+      }
+      const versionCode = Number(parsed.versionCode ?? 0)
+      const minSupportedCode = Number(parsed.minSupportedCode ?? 1)
+      if (versionCode && parsed.apkUrl) {
+        return json({
+          latest: {
+            versionCode,
+            versionName: parsed.versionName ?? String(versionCode),
+            apkUrl: parsed.apkUrl,
+            sha256: parsed.sha256,
+            sizeBytes: parsed.sizeBytes,
+            notes: parsed.notes ?? '',
+            mandatory: current < minSupportedCode,
+            minSupportedCode,
+          },
+          updateRequired: versionCode > current || current < minSupportedCode,
+          minSupportedCode,
+        })
+      }
+    } catch {
+      // A malformed manifest must not break the app: fall through to no update.
+    }
+  }
+
+  const code = Number(env.ANDROID_VERSION_CODE ?? '0') || 0
+  const min = Number(env.ANDROID_MIN_CODE ?? '0') || 0
+
+  if (!code || !env.ANDROID_APK_URL) {
+    return json({ latest: null, updateRequired: false, minSupportedCode: min })
+  }
+
+  const size = Number(env.ANDROID_APK_SIZE ?? '0') || 0
+  return json({
+    latest: {
+      versionCode: code,
+      versionName: env.ANDROID_VERSION_NAME ?? String(code),
+      apkUrl: env.ANDROID_APK_URL,
+      sha256: env.ANDROID_APK_SHA256 ?? undefined,
+      sizeBytes: size || undefined,
+      notes: env.ANDROID_RELEASE_NOTES ?? '',
+      mandatory: current < min,
+      minSupportedCode: min,
+    },
+    updateRequired: code > current || current < min,
+    minSupportedCode: min,
+  })
+}
+
 async function invitePreview(env: Env, code: string): Promise<Response> {
   const loaded = await loadGroupByCode(env, code.toUpperCase())
   if (!loaded) return json({ error: 'That invite link is not valid.' }, 404)
@@ -1207,6 +1287,10 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
 
   if (parts[1] === 'health') {
     return json({ ok: true, realtime: Boolean(env.REALTIME) })
+  }
+
+  if (parts[1] === 'app' && parts[2] === 'releases' && method === 'GET') {
+    return releaseManifest(env, url)
   }
 
   if (parts[1] === 'auth' && parts.length === 3 && method === 'POST') {

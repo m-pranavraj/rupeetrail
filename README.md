@@ -75,6 +75,33 @@ typed data layer). See [SUPABASE.md](SUPABASE.md) to switch it on.
 - The Worker creates its own table on first use, so a fresh D1 database needs no
   manual SQL. `worker/migrations/0001_init.sql` mirrors that schema for Wrangler.
 
+## Native Android app
+
+The app in `mobile/` is a React Native (Expo) build of the same ledger: phone +
+PIN accounts, groups, expenses, balances, settlement recording, adding people who
+have not joined, and a prompt when a newer APK exists. It shares the money maths
+with the web app (`scripts/sync-native-logic.mjs` copies the pure modules), and it
+is **online-only** by design: a shared ledger needs the server.
+
+**Download:** https://github.com/m-pranavraj/rupeetrail/releases/latest — install
+with "allow installs from this source" enabled, then sign in with your number.
+
+```bash
+cd mobile
+npm install
+npx tsc --noEmit
+npx expo prebuild --platform android --no-install
+cd android && ./gradlew assembleRelease   # arm64 + debug-signed by default
+```
+
+Point it at another backend with `EXPO_PUBLIC_API_BASE` at build time. Publishing
+a new version, signing keys and the update manifest are in [DEPLOY.md](DEPLOY.md);
+the architecture plan is in [docs/launch-plan.md](docs/launch-plan.md).
+
+The Worker serves the update check at `GET /api/app/releases`; it returns
+`{ latest: null }` until a release is configured, so no build nags users by
+accident.
+
 ## Local development
 
 ```bash
@@ -122,5 +149,8 @@ then deploy the manifest. `wrangler.jsonc` is for local development only.
   is closed; members can be removed only by leaving the group on their device.
 - Writes require connectivity. Cached snapshots are readable offline, but the
   app does not queue offline mutations.
-- Not built yet: receipt OCR, recurring expenses, budgets/charts, provider-level
+- The native app does not include bill scanning or voice capture yet: Tesseract
+  and the Web Speech API are browser features, and each needs a native
+  replacement before it can ship in the APK.
+- Not built yet: receipt OCR in the native app, recurring expenses, budgets/charts, provider-level
   settlement verification, and a close-out report for finished trips.

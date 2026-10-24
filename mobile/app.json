@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "RupeeTrail",
+    "slug": "rupeetrail",
+    "scheme": "rupeetrail",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0b1512",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0b1512"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.rupeetrail"
+    },
+    "android": {
+      "package": "app.rupeetrail",
+      "versionCode": 1,
+      "permissions": ["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"],
+      "adaptiveIcon": {
+        "backgroundColor": "#0b1512",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

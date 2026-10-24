@@ -1,0 +1,453 @@
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import { AppState } from 'react-native'
+import * as api from './api'
+import type { AuthMembership, GroupSnapshot } from './api'
+import type { Expense, Settlement } from './lib/types'
+import { connectGroup, type LiveStatus } from './realtime'
+import { readSession, writeSession, type StoredSession } from './storage'
+
+interface ActiveGroup {
+  membership: AuthMembership
+  snapshot: GroupSnapshot
+  live: LiveStatus
+}
+
+interface Store {
+  ready: boolean
+  session: StoredSession | null
+  active: ActiveGroup | null
+  busy: boolean
+  error: string | null
+  notice: string | null
+
+  signUp(input: { name: string; phone: string; pin: string; upiId?: string }): Promise<boolean>
+  signIn(input: { phone: string; pin: string }): Promise<boolean>
+  signOut(): Promise<void>
+
+  createGroup(input: { name: string; emoji: string }): Promise<boolean>
+  joinGroup(code: string): Promise<boolean>
+
+  openGroup(groupId: string): Promise<void>
+  closeGroup(): void
+  refresh(): Promise<void>
+
+  addExpense(input: api.ExpenseInput): Promise<boolean>
+  removeExpense(expenseId: string): Promise<boolean>
+  addPerson(name: string, upiId: string): Promise<boolean>
+  removePerson(memberId: string): Promise<boolean>
+  settle(input: { from: string; to: string; amountPaise: number }): Promise<boolean>
+  confirmSettlement(id: string, action: 'paid' | 'received' | 'dispute'): Promise<boolean>
+  acknowledge(expenseId: string, status: 'acknowledged' | 'questioned'): Promise<boolean>
+
+  clearMessages(): void
+}
+
+const StoreContext = createContext<Store | null>(null)
+
+export function useStore(): Store {
+  const store = useContext(StoreContext)
+  if (!store) throw new Error('useStore must be used inside LedgerProvider')
+  return store
+}
+
+function membershipFor(snapshot: GroupSnapshot, token: string, joinedAt = Date.now()): AuthMembership {
+  return {
+    groupId: snapshot.group.id,
+    memberId: snapshot.me.id,
+    token,
+    groupName: snapshot.group.name,
+    emoji: snapshot.group.emoji,
+    name: snapshot.me.name,
+    upiId: snapshot.me.upiId ?? '',
+    joinedAt,
+  }
+}
+
+export function LedgerProvider({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = useState(false)
+  const [session, setSession] = useState<StoredSession | null>(null)
+  const [active, setActive] = useState<ActiveGroup | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const sessionRef = useRef<StoredSession | null>(null)
+  const activeRef = useRef<ActiveGroup | null>(null)
+  const socketRef = useRef<{ close: () => void } | null>(null)
+
+  const applySession = useCallback((next: StoredSession | null) => {
+    sessionRef.current = next
+    setSession(next)
+    void writeSession(next)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const stored = await readSession()
+      if (!cancelled) {
+        sessionRef.current = stored
+        setSession(stored)
+        setReady(true)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    activeRef.current = active
+  }, [active])
+
+  useEffect(
+    () => () => {
+      socketRef.current?.close()
+      socketRef.current = null
+    },
+    [],
+  )
+
+  const fail = useCallback((cause: unknown) => {
+    const message = cause instanceof api.ApiError ? cause.message : 'Something went wrong. Try again.'
+    setError(message)
+    return false
+  }, [])
+
+  const requireSession = useCallback((): StoredSession => {
+    const current = sessionRef.current
+    if (!current) throw new api.ApiError('Sign in again to continue.', 401)
+    return current
+  }, [])
+
+  /* ------------------------------------------------------------- accounts */
+
+  const signUp = useCallback<Store['signUp']>(
+    async (input) => {
+      setBusy(true)
+      setError(null)
+      try {
+        const auth = await api.registerAccount(input)
+        applySession({ token: auth.token, user: auth.user, memberships: auth.memberships })
+        setNotice(`Welcome, ${auth.user.name.split(' ')[0]}.`)
+        return true
+      } catch (cause) {
+        return fail(cause)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [applySession, fail],
+  )
+
+  const signIn = useCallback<Store['signIn']>(
+    async (input) => {
+      setBusy(true)
+      setError(null)
+      try {
+        const auth = await api.loginAccount(input)
+        applySession({ token: auth.token, user: auth.user, memberships: auth.memberships })
+        setNotice('Signed in. Your groups are back.')
+        return true
+      } catch (cause) {
+        return fail(cause)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [applySession, fail],
+  )
+
+  const signOut = useCallback<Store['signOut']>(async () => {
+    const current = sessionRef.current
+    socketRef.current?.close()
+    socketRef.current = null
+    setActive(null)
+    applySession(null)
+    setNotice(null)
+    if (current) {
+      try {
+        await api.logoutAccount(current.token)
+      } catch {
+        // The local session is already gone; a failed revoke is not fatal.
+      }
+    }
+  }, [applySession])
+
+  /* --------------------------------------------------------------- groups */
+
+  const remember = useCallback(
+    (snapshot: GroupSnapshot, token: string) => {
+      const current = requireSession()
+      const membership = membershipFor(snapshot, token)
+      const memberships = [
+        membership,
+        ...current.memberships.filter((entry) => entry.groupId !== membership.groupId),
+      ]
+      applySession({ ...current, memberships })
+    },
+    [applySession, requireSession],
+  )
+
+  const createGroup = useCallback<Store['createGroup']>(
+    async ({ name, emoji }) => {
+      setBusy(true)
+      setError(null)
+      try {
+        const current = requireSession()
+        const snapshot = await api.createGroup(current.token, {
+          name,
+          emoji,
+          memberName: current.user.name,
+          upiId: current.user.upiId,
+        })
+        remember(snapshot, snapshot.token)
+        setNotice('Group created. Share the invite code.')
+        return true
+      } catch (cause) {
+        return fail(cause)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [fail, remember, requireSession],
+  )
+
+  const joinGroup = useCallback<Store['joinGroup']>(
+    async (code) => {
+      setBusy(true)
+      setError(null)
+      try {
+        const current = requireSession()
+        const snapshot = await api.joinGroup(current.token, {
+          code: code.trim().toUpperCase(),
+          memberName: current.user.name,
+          upiId: current.user.upiId,
+        })
+        remember(snapshot, snapshot.token)
+        setNotice('You are in.')
+        return true
+      } catch (cause) {
+        return fail(cause)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [fail, remember, requireSession],
+  )
+
+  /* ----------------------------------------------------------- active group */
+
+  const openGroup = useCallback<Store['openGroup']>(async (groupId) => {
+    const current = sessionRef.current
+    const membership = current?.memberships.find((entry) => entry.groupId === groupId)
+    if (!membership) {
+      setError('This phone does not have access to that group.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const snapshot = await api.fetchGroup(groupId, membership)
+      setActive({ membership, snapshot, live: 'connecting' })
+
+      socketRef.current?.close()
+      socketRef.current = connectGroup({
+        groupId,
+        credentials: membership,
+        onLedger: () => {
+          void api
+            .fetchGroup(groupId, membership)
+            .then((fresh) => setActive((prev) => (prev ? { ...prev, snapshot: fresh } : prev)))
+            .catch(() => undefined)
+        },
+        onStatus: (live) => setActive((prev) => (prev ? { ...prev, live } : prev)),
+      })
+    } catch (cause) {
+      fail(cause)
+      setActive(null)
+    } finally {
+      setBusy(false)
+    }
+  }, [fail])
+
+  const closeGroup = useCallback(() => {
+    socketRef.current?.close()
+    socketRef.current = null
+    setActive(null)
+  }, [])
+
+  const refresh = useCallback<Store['refresh']>(async () => {
+    const current = activeRef.current
+    if (!current) return
+    try {
+      const snapshot = await api.fetchGroup(current.membership.groupId, current.membership)
+      setActive((prev) => (prev ? { ...prev, snapshot } : prev))
+    } catch (cause) {
+      fail(cause)
+    }
+  }, [fail])
+
+  /** Run a mutation that answers with a fresh snapshot. */
+  const mutate = useCallback(
+    async (work: (target: ActiveGroup) => Promise<GroupSnapshot>): Promise<boolean> => {
+      const current = activeRef.current
+      if (!current) return false
+      setBusy(true)
+      setError(null)
+      try {
+        const snapshot = await work(current)
+        setActive((prev) => (prev ? { ...prev, snapshot } : prev))
+        return true
+      } catch (cause) {
+        return fail(cause)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [fail],
+  )
+
+  const addExpense = useCallback<Store['addExpense']>(
+    (input) => mutate(({ membership }) => api.addExpense(membership.groupId, membership, input)),
+    [mutate],
+  )
+
+  const removeExpense = useCallback<Store['removeExpense']>(
+    (expenseId) =>
+      mutate(({ membership }) =>
+        api.deleteExpense(membership.groupId, membership, expenseId),
+      ),
+    [mutate],
+  )
+
+  const addPerson = useCallback<Store['addPerson']>(
+    (name, upiId) =>
+      mutate(({ membership }) =>
+        api.addMember(membership.groupId, membership, { name, upiId: upiId.trim() || undefined }),
+      ),
+    [mutate],
+  )
+
+  const removePerson = useCallback<Store['removePerson']>(
+    (memberId) =>
+      mutate(({ membership }) => api.removeMember(membership.groupId, membership, memberId)),
+    [mutate],
+  )
+
+  const settle = useCallback<Store['settle']>(
+    ({ from, to, amountPaise }) =>
+      mutate(({ membership }) =>
+        api.addSettlement(membership.groupId, membership, {
+          from,
+          to,
+          amountPaise,
+          method: 'upi',
+        }),
+      ),
+    [mutate],
+  )
+
+  const confirmSettlement = useCallback<Store['confirmSettlement']>(
+    (id, action) =>
+      mutate(({ membership }) =>
+        api.confirmSettlement(membership.groupId, membership, id, action),
+      ),
+    [mutate],
+  )
+
+  const acknowledge = useCallback<Store['acknowledge']>(
+    (expenseId, status) =>
+      mutate(({ membership }) =>
+        api.ackExpense(membership.groupId, membership, expenseId, status),
+      ),
+    [mutate],
+  )
+
+  const clearMessages = useCallback(() => {
+    setError(null)
+    setNotice(null)
+  }, [])
+
+  // Pull the ledger when the app comes back to the foreground.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void refresh()
+    })
+    return () => sub.remove()
+  }, [refresh])
+
+  // Keep the open ledger fresh even when the socket cannot attach (some
+  // networks block WebSockets). The socket, when it works, is faster than this.
+  const openGroupId = active?.membership.groupId
+  useEffect(() => {
+    if (!openGroupId) return
+    const timer = setInterval(() => {
+      void refresh()
+    }, 12_000)
+    return () => clearInterval(timer)
+  }, [openGroupId, refresh])
+
+  const value = useMemo<Store>(
+    () => ({
+      ready,
+      session,
+      active,
+      busy,
+      error,
+      notice,
+      signUp,
+      signIn,
+      signOut,
+      createGroup,
+      joinGroup,
+      openGroup,
+      closeGroup,
+      refresh,
+      addExpense,
+      removeExpense,
+      addPerson,
+      removePerson,
+      settle,
+      confirmSettlement,
+      acknowledge,
+      clearMessages,
+    }),
+    [
+      ready,
+      session,
+      active,
+      busy,
+      error,
+      notice,
+      signUp,
+      signIn,
+      signOut,
+      createGroup,
+      joinGroup,
+      openGroup,
+      closeGroup,
+      refresh,
+      addExpense,
+      removeExpense,
+      addPerson,
+      removePerson,
+      settle,
+      confirmSettlement,
+      acknowledge,
+      clearMessages,
+    ],
+  )
+
+  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
+}
+
+export type { Expense, Settlement }

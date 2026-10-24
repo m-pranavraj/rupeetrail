@@ -1,0 +1,48 @@
+# Render Blueprint for the RupeeTrail API.
+#
+# The API is still the Cloudflare Worker in worker/index.ts. This blueprint
+# targets the Node port described in docs/launch-plan.md, which will live in
+# server/. Render will fail the build until that directory exists — that is
+# intentional, so nobody deploys an empty service by accident.
+services:
+  - type: web
+    name: rupeetrail-api
+    runtime: node
+    plan: 0.5c-512mb # free sleeps after 15 min and drops WebSockets
+    region: singapore
+    rootDir: server
+    buildCommand: npm ci && npm run build
+    # Migrations run on paid plans only. On Free, run once by hand:
+    #   DATABASE_URL=... npm run db:migrate
+    preDeployCommand: npm run db:migrate
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # Supavisor session pooler, port 5432, sslmode=require
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: REALTIME_TICKET_SECRET
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      # Android update manifest, read by GET /api/app/releases
+      - key: ANDROID_VERSION_CODE
+        sync: false
+      - key: ANDROID_VERSION_NAME
+        sync: false
+      - key: ANDROID_APK_URL
+        sync: false
+      - key: ANDROID_APK_SHA256
+        sync: false
+      - key: ANDROID_APK_SIZE
+        sync: false
+      - key: ANDROID_MIN_CODE
+        sync: false
+      - key: ANDROID_RELEASE_NOTES
+        sync: false
