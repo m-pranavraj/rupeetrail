@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [],
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["worker", "src/types.ts", "src/lib/splits.ts", "freebuff-realtime/server.d.ts"]
+}

@@ -1,0 +1,65 @@
+import type { MemberBalance, MemberId, SettlementPlan, Transfer } from '../types'
+
+/**
+ * Build a settlement plan from net balances.
+ *
+ * Greedy largest-debtor / largest-creditor matching. This produces at most
+ * (participants - 1) transfers and settles every balance exactly, which is the
+ * practical minimum for a single-round plan. We state plainly whether the plan
+ * is minimal, as the PRD requires.
+ */
+export function planSettlements(balances: MemberBalance[]): SettlementPlan {
+  const creditors = balances
+    .filter((b) => b.netPaise > 0)
+    .map((b) => ({ id: b.memberId, amount: b.netPaise }))
+    .sort((a, b) => b.amount - a.amount || a.id.localeCompare(b.id))
+
+  const debtors = balances
+    .filter((b) => b.netPaise < 0)
+    .map((b) => ({ id: b.memberId, amount: -b.netPaise }))
+    .sort((a, b) => b.amount - a.amount || a.id.localeCompare(b.id))
+
+  const totalCredit = creditors.reduce((s, c) => s + c.amount, 0)
+  const totalDebt = debtors.reduce((s, d) => s + d.amount, 0)
+  const notes: string[] = []
+
+  if (totalCredit !== totalDebt) {
+    notes.push(
+      `Balances do not reconcile (${totalCredit} paid vs ${totalDebt} owed in paise). Check expense shares before settling.`,
+    )
+    return { transfers: [], minimal: false, notes }
+  }
+
+  const transfers: Transfer[] = []
+  let i = 0
+  let j = 0
+  while (i < debtors.length && j < creditors.length) {
+    const debtor = debtors[i]
+    const creditor = creditors[j]
+    const amount = Math.min(debtor.amount, creditor.amount)
+    if (amount > 0) {
+      transfers.push({ from: debtor.id, to: creditor.id, amountPaise: amount })
+    }
+    debtor.amount -= amount
+    creditor.amount -= amount
+    if (debtor.amount === 0) i += 1
+    if (creditor.amount === 0) j += 1
+  }
+
+  const activeMembers = creditors.length + debtors.length
+  const minimal = transfers.length <= Math.max(0, activeMembers - 1)
+  if (transfers.length === 0) {
+    notes.push('Everyone is settled up. Nothing to transfer.')
+  } else if (minimal) {
+    notes.push(
+      `${transfers.length} transfer${transfers.length === 1 ? '' : 's'} clears the group. That is the minimum for ${activeMembers} unsettled ${activeMembers === 1 ? 'person' : 'people'}.`,
+    )
+  }
+
+  return { transfers, minimal, notes }
+}
+
+/** Transfers that involve a given member, for "your next step" UI. */
+export function transfersFor(plan: SettlementPlan, memberId: MemberId): Transfer[] {
+  return plan.transfers.filter((t) => t.from === memberId || t.to === memberId)
+}

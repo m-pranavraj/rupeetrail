@@ -1,0 +1,28 @@
+{
+  "name": "rupeetrail",
+  "main": "worker-dist/index.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rupeetrail-db",
+      "database_id": "00000000-0000-4000-8000-000000000000",
+      "migrations_dir": "worker/migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REALTIME",
+        "class_name": "FreebuffRealtime",
+        "script_name": "freebuff-sites-realtime-local"
+      }
+    ]
+  }
+}
