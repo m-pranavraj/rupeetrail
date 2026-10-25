@@ -131,9 +131,9 @@ export function AuthScreen() {
             loading={busy}
           />
 
-          <Muted small style={{ textAlign: 'center', marginTop: spacing(4) }}>
-            Powered by Govira · govira.tech
-          </Muted>
+          <View style={{ alignItems: 'center', marginTop: spacing(4) }}>
+            <Muted small>Powered by Govira · govira.tech</Muted>
+          </View>
         </Body>
       </Screen>
     </KeyboardAvoidingView>

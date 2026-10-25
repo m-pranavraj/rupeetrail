@@ -3,6 +3,7 @@ import { Alert, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Banner, Body, Button, Card, Field, Muted, ModalSheet, Screen, Subtitle, Title } from '../components/ui'
 import { useStore } from '../state'
 import { BannerAd, BannerAdSize } from 'react-native-google-mobile-ads'
+import { colors, radius, spacing } from '../theme'
 
 const EMOJI = ['🏖️', '🏠', '🍜', '🚗', '🎉', '🏔️']
 
@@ -67,9 +68,9 @@ export function GroupsScreen() {
         <Button label="Create a group" onPress={() => { clearMessages(); setCreating(true) }} />
         <Button label="Join with a code" variant="soft" onPress={() => { clearMessages(); setJoining(true) }} />
 
-        <Muted small style={{ textAlign: 'center', marginTop: spacing(4) }}>
-          Powered by Govira · govira.tech
-        </Muted>
+        <View style={{ alignItems: 'center', marginTop: spacing(4) }}>
+          <Muted small>Powered by Govira · govira.tech</Muted>
+        </View>
       </Body>
 
       <ModalSheet visible={creating} title="New group" onClose={() => setCreating(false)}>
