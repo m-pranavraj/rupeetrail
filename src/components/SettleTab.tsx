@@ -116,7 +116,7 @@ export function SettleTab({
         )}
 
         <p className="fineprint">
-          These moves are calculated from confirmed balances. RupeeTrail never touches the money — record what
+          These moves are calculated from confirmed balances. RupeeSplit never touches the money — record what
           actually moved.
         </p>
       </section>

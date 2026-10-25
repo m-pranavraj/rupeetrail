@@ -1,4 +1,4 @@
-/** Supabase client for RupeeTrail.
+/** Supabase client for RupeeSplit.
  *
  * Configuration (Vite env, see .env.example):
  *   VITE_SUPABASE_URL=https://<project>.supabase.co

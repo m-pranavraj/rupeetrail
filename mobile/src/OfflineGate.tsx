@@ -4,7 +4,7 @@ import { Button } from './components/ui'
 import { colors, spacing } from './theme'
 
 /**
- * RupeeTrail is server-authoritative: balances must be computed from the same
+ * RupeeSplit is server-authoritative: balances must be computed from the same
  * ledger everyone else sees, so the app does not run without a connection.
  */
 export function OfflineGate({ onRetry }: { onRetry: () => void }) {
@@ -13,7 +13,7 @@ export function OfflineGate({ onRetry }: { onRetry: () => void }) {
       <Text style={styles.icon}>⇅</Text>
       <Text style={styles.title}>You're offline</Text>
       <Text style={styles.body}>
-        RupeeTrail keeps every trip on the server so nobody's balance can drift. Turn on mobile data or
+        RupeeSplit keeps every trip on the server so nobody's balance can drift. Turn on mobile data or
         Wi-Fi and try again.
       </Text>
       <Button label="Try again" onPress={onRetry} />

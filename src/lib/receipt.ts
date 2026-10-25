@@ -56,10 +56,11 @@ const KEY = {
 export function normaliseOcr(raw: string): string {
   return raw
     .replace(/\u00a0/g, ' ')
-    .replace(/(?<=\d)[Oo](?=\d)/g, '0')
-    .replace(/(?<=\d)[lI|](?=\d)/g, '1')
-    .replace(/(?<=\d)[Ss](?=\d)/g, '5')
-    .replace(/(?<=\d)[Bb](?=\d)/g, '8')
+    // Capture groups instead of lookbehind: Hermes does not guarantee it.
+    .replace(/(\d)[Oo](?=\d)/g, (_match, digit: string) => `${digit}0`)
+    .replace(/(\d)[lI|](?=\d)/g, (_match, digit: string) => `${digit}1`)
+    .replace(/(\d)[Ss](?=\d)/g, (_match, digit: string) => `${digit}5`)
+    .replace(/(\d)[Bb](?=\d)/g, (_match, digit: string) => `${digit}8`)
 }
 
 /** OCR mixes up these characters inside numbers. Repair only number-like tokens. */

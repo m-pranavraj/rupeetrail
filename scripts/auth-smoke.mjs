@@ -32,7 +32,7 @@ async function call(path, { method = 'GET', body, headers = {} } = {}) {
 const phone = `9${String(Date.now()).slice(-9)}`
 const pin = '4321'
 
-console.log(`\nRupeeTrail account smoke test → ${API}\n`)
+console.log(`\nRupeeSplit account smoke test → ${API}\n`)
 
 const registered = await call('/api/auth/register', {
   method: 'POST',

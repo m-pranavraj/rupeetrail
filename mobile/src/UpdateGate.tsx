@@ -46,7 +46,7 @@ export function UpdateGate() {
           <Text style={styles.body}>
             You are on {APP_VERSION_NAME} ({APP_VERSION_CODE}).{'\n'}
             {release.sizeBytes ? `${Math.round(release.sizeBytes / (1024 * 1024))} MB · ` : ''}
-            {mandatory ? 'This update is required to keep using RupeeTrail.' : 'Update when convenient.'}
+            {mandatory ? 'This update is required to keep using RupeeSplit.' : 'Update when convenient.'}
           </Text>
           {release.notes ? <Text style={styles.notes}>{release.notes.trim()}</Text> : null}
 

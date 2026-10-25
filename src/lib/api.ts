@@ -92,7 +92,7 @@ async function call<T>(path: string, options: CallOptions = {}): Promise<T> {
       cache: 'no-store',
     })
   } catch {
-    throw new ApiError("Can't reach RupeeTrail right now. Check your connection and try again.", 0)
+    throw new ApiError("Can't reach RupeeSplit right now. Check your connection and try again.", 0)
   }
 
   const payload = (await response.json().catch(() => null)) as { error?: string } | null

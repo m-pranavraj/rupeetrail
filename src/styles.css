@@ -1,5 +1,5 @@
 /* ============================================================
-   RupeeTrail — design system
+   RupeeSplit — design system
    Warm paper, deep forest ink, amber accents. Mobile-first.
    ============================================================ */
 
@@ -501,6 +501,19 @@ h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 0 4px;
+}
+
+.govira-link {
+  color: var(--muted, #8aa79a);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 140ms ease;
+}
+
+.govira-link:hover {
+  color: var(--accent, #4fd1a5);
 }
 
 .save-note {

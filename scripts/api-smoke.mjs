@@ -177,7 +177,7 @@ function openSocket(url, origin) {
   }
 }
 
-console.log(`\nRupeeTrail API smoke test → ${API}\n`)
+console.log(`\nRupeeSplit API smoke test → ${API}\n`)
 
 /* 1. health */
 const health = await api('/api/health')

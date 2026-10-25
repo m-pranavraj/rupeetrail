@@ -50,7 +50,7 @@ export function InviteSheet({
     }
   }
   const link = code ? inviteUrl(code) : ''
-  const message = `Join “${group.name}” on RupeeTrail — log what each of us paid and settle up without arguments: ${link}`
+  const message = `Join “${group.name}” on RupeeSplit — log what each of us paid and settle up without arguments: ${link}`
 
   const copy = async (value: string, which: 'link' | 'code' | 'upi') => {
     if (!value) return

@@ -1,4 +1,4 @@
-# RupeeTrail — launch plan: Render backend, Supabase Postgres, Android APK
+# RupeeSplit — launch plan: Render backend, Supabase Postgres, Android APK
 
 Status: plan for the move away from Cloudflare Workers/D1 + Sites realtime.
 Scope: backend on Render, data in Supabase Postgres, Android app (Capacitor) with
@@ -377,7 +377,7 @@ announce a short freeze instead of pretending otherwise.
 npm i @capacitor/core @capacitor/android
 npm i @capacitor/app @capacitor/camera @capacitor/share @capacitor/browser \
       @capacitor/status-bar @capacitor/keyboard @capacitor/preferences
-npx cap init "RupeeTrail" app.rupeetrail --web-dir=dist
+npx cap init "RupeeSplit" app.rupeetrail --web-dir=dist
 npx cap add android
 ```
 
@@ -485,7 +485,7 @@ non-dismissable "Update to continue" sheet.
    `FLAG_GRANT_READ_URI_PERMISSION`. Declare
    `android.permission.REQUEST_INSTALL_PACKAGES`; if
    `packageManager.canRequestPackageInstalls()` is false, deep-link the user to
-   Settings → Install unknown apps for RupeeTrail.
+   Settings → Install unknown apps for RupeeSplit.
 6. Android always shows its own install confirmation — no silent updates exist for
    normal apps, and you should not promise them.
 7. After install, `versionCode` increases and the next check returns 204.

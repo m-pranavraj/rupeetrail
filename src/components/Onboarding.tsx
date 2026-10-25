@@ -74,7 +74,7 @@ export function Onboarding({
           <button className="icon-btn" onClick={onClose} aria-label="Close">
             ✕
           </button>
-          <span className="join__brand">RupeeTrail</span>
+          <span className="join__brand">RupeeSplit</span>
         </header>
       )}
 

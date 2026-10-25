@@ -1,5 +1,5 @@
 /**
- * RupeeTrail domain model.
+ * RupeeSplit domain model.
  *
  * Invariant: every monetary amount in this app is an integer number of paise.
  * Rupees only appear at the formatting boundary (see lib/money.ts).

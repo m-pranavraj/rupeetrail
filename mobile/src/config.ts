@@ -11,7 +11,7 @@ export const API_BASE = (process.env.EXPO_PUBLIC_API_BASE ?? FALLBACK_API_BASE).
 
 /** Bumped by the release build; the server compares this number. */
 export const APP_VERSION_CODE = Number(process.env.EXPO_PUBLIC_VERSION_CODE ?? 1)
-export const APP_VERSION_NAME = process.env.EXPO_PUBLIC_VERSION_NAME ?? '1.0.0'
+export const APP_VERSION_NAME = process.env.EXPO_PUBLIC_VERSION_NAME ?? '2.0.0'
 export const RELEASE_CHANNEL = process.env.EXPO_PUBLIC_CHANNEL ?? 'stable'
 
 /** The installed app's version, shown in settings. */

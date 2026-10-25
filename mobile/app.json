@@ -1,1 +1,63 @@
-{"expo":{"name":"RupeeSplit","slug":"rupeetrail","scheme":"rupeetrail","version":"1.0.0","orientation":"portrait","icon":"./assets/icon.png","userInterfaceStyle":"dark","backgroundColor":"#0b1512","splash":{"image":"./assets/splash-icon.png","resizeMode":"contain","backgroundColor":"#0b1512"},"ios":{"supportsTablet":true,"bundleIdentifier":"app.rupeetrail"},"plugins":[],"android":{"package":"app.rupeetrail","versionCode":2,"permissions":["android.permission.INTERNET","android.permission.ACCESS_NETWORK_STATE"],"adaptiveIcon":{"backgroundColor":"#0b1512","foregroundImage":"./assets/android-icon-foreground.png","backgroundImage":"./assets/android-icon-background.png","monochromeImage":"./assets/android-icon-monochrome.png"},"predictiveBackGestureEnabled":false},"web":{"favicon":"./assets/favicon.png"}}}
+{
+  "expo": {
+    "name": "RupeeSplit",
+    "slug": "rupeesplit",
+    "scheme": "rupeesplit",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#07130f",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.rupeetrail"
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#07130f"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "RupeeSplit reads a bill photo you choose so it can fill in the expense.",
+          "cameraPermission": "RupeeSplit uses the camera to photograph a bill and read it on this phone."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "RupeeSplit tags an expense with where it happened so your trip map is accurate."
+        }
+      ],
+      "expo-sharing"
+    ],
+    "android": {
+      "package": "app.rupeetrail",
+      "versionCode": 12,
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#07130f",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

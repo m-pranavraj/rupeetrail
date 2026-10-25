@@ -11,6 +11,14 @@ import { AppState } from 'react-native'
 import * as api from './api'
 import type { AuthMembership, GroupSnapshot } from './api'
 import type { Expense, Settlement } from './lib/types'
+import {
+  currentPoint,
+  readGeo,
+  removeGeoPoints,
+  setGeoPoint,
+  type GeoMap,
+  type GeoPoint,
+} from './lib/geo'
 import { connectGroup, type LiveStatus } from './realtime'
 import { readSession, writeSession, type StoredSession } from './storage'
 
@@ -39,13 +47,22 @@ interface Store {
   closeGroup(): void
   refresh(): Promise<void>
 
-  addExpense(input: api.ExpenseInput): Promise<boolean>
+  addExpense(input: api.ExpenseInput): Promise<string | null>
+  updateExpense(expenseId: string, input: api.ExpenseInput): Promise<boolean>
   removeExpense(expenseId: string): Promise<boolean>
   addPerson(name: string, upiId: string): Promise<boolean>
   removePerson(memberId: string): Promise<boolean>
   settle(input: { from: string; to: string; amountPaise: number }): Promise<boolean>
   confirmSettlement(id: string, action: 'paid' | 'received' | 'dispute'): Promise<boolean>
-  acknowledge(expenseId: string, status: 'acknowledged' | 'questioned'): Promise<boolean>
+  acknowledge(expenseId: string, status: 'acknowledged' | 'questioned', reason?: string): Promise<boolean>
+  resolveDispute(expenseId: string, resolution: string): Promise<boolean>
+  patchGroup(patch: { name?: string; emoji?: string; status?: 'active' | 'reconciling' | 'closed' }): Promise<boolean>
+  updateMe(patch: { name?: string; upiId?: string }): Promise<boolean>
+
+  /** Device-side place tags keyed by expense id. */
+  geo: GeoMap
+  tagPlace(expenseId: string, label?: string): Promise<GeoPoint | null>
+  clearPlace(expenseId: string): Promise<void>
 
   clearMessages(): void
 }
@@ -78,6 +95,7 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [geo, setGeo] = useState<GeoMap>({})
 
   const sessionRef = useRef<StoredSession | null>(null)
   const activeRef = useRef<ActiveGroup | null>(null)
@@ -92,10 +110,11 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const stored = await readSession()
+      const [stored, places] = await Promise.all([readSession(), readGeo()])
       if (!cancelled) {
         sessionRef.current = stored
         setSession(stored)
+        setGeo(places)
         setReady(true)
       }
     })()
@@ -317,17 +336,57 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   )
 
   const addExpense = useCallback<Store['addExpense']>(
-    (input) => mutate(({ membership }) => api.addExpense(membership.groupId, membership, input)),
+    async (input) => {
+      const current = activeRef.current
+      if (!current) return null
+      setBusy(true)
+      setError(null)
+      try {
+        const snapshot = await api.addExpense(current.membership.groupId, current.membership, input)
+        setActive((prev) => (prev ? { ...prev, snapshot } : prev))
+        return snapshot.expenseId
+      } catch (cause) {
+        fail(cause)
+        return null
+      } finally {
+        setBusy(false)
+      }
+    },
+    [fail],
+  )
+
+  const updateExpense = useCallback<Store['updateExpense']>(
+    (expenseId, input) =>
+      mutate(({ membership }) => api.updateExpense(membership.groupId, membership, expenseId, input)),
     [mutate],
   )
 
   const removeExpense = useCallback<Store['removeExpense']>(
-    (expenseId) =>
-      mutate(({ membership }) =>
+    async (expenseId) => {
+      const ok = await mutate(({ membership }) =>
         api.deleteExpense(membership.groupId, membership, expenseId),
-      ),
+      )
+      if (ok) {
+        const next = await removeGeoPoints([expenseId])
+        setGeo({ ...next })
+      }
+      return ok
+    },
     [mutate],
   )
+
+  const tagPlace = useCallback<Store['tagPlace']>(async (expenseId, label) => {
+    const point = await currentPoint(label)
+    if (!point) return null
+    const next = await setGeoPoint(expenseId, point)
+    setGeo({ ...next })
+    return point
+  }, [])
+
+  const clearPlace = useCallback<Store['clearPlace']>(async (expenseId) => {
+    const next = await removeGeoPoints([expenseId])
+    setGeo({ ...next })
+  }, [])
 
   const addPerson = useCallback<Store['addPerson']>(
     (name, upiId) =>
@@ -365,10 +424,59 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   )
 
   const acknowledge = useCallback<Store['acknowledge']>(
-    (expenseId, status) =>
+    (expenseId, status, reason) =>
       mutate(({ membership }) =>
-        api.ackExpense(membership.groupId, membership, expenseId, status),
+        api.ackExpense(membership.groupId, membership, expenseId, status, reason),
       ),
+    [mutate],
+  )
+
+  const resolveDispute = useCallback<Store['resolveDispute']>(
+    (expenseId, resolution) =>
+      mutate(({ membership }) =>
+        api.resolveDispute(membership.groupId, membership, expenseId, resolution),
+      ),
+    [mutate],
+  )
+
+  const patchGroup = useCallback<Store['patchGroup']>(
+    async (patch) => {
+      const ok = await mutate(({ membership }) => api.patchGroup(membership.groupId, membership, patch))
+      if (ok) {
+        const current = sessionRef.current
+        const activeGroup = activeRef.current
+        if (current && activeGroup) {
+          const memberships = current.memberships.map((entry) =>
+            entry.groupId === activeGroup.membership.groupId
+              ? {
+                  ...entry,
+                  groupName: patch.name ?? entry.groupName,
+                  emoji: patch.emoji ?? entry.emoji,
+                }
+              : entry,
+          )
+          applySession({ ...current, memberships })
+          setActive((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  membership: {
+                    ...prev.membership,
+                    groupName: patch.name ?? prev.membership.groupName,
+                    emoji: patch.emoji ?? prev.membership.emoji,
+                  },
+                }
+              : prev,
+          )
+        }
+      }
+      return ok
+    },
+    [applySession, mutate],
+  )
+
+  const updateMe = useCallback<Store['updateMe']>(
+    (patch) => mutate(({ membership }) => api.patchMe(membership.groupId, membership, patch)),
     [mutate],
   )
 
@@ -413,12 +521,19 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
       closeGroup,
       refresh,
       addExpense,
+      updateExpense,
       removeExpense,
       addPerson,
       removePerson,
       settle,
       confirmSettlement,
       acknowledge,
+      resolveDispute,
+      patchGroup,
+      updateMe,
+      geo,
+      tagPlace,
+      clearPlace,
       clearMessages,
     }),
     [
@@ -437,12 +552,19 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
       closeGroup,
       refresh,
       addExpense,
+      updateExpense,
       removeExpense,
       addPerson,
       removePerson,
       settle,
       confirmSettlement,
       acknowledge,
+      resolveDispute,
+      patchGroup,
+      updateMe,
+      geo,
+      tagPlace,
+      clearPlace,
       clearMessages,
     ],
   )

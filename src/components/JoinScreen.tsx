@@ -74,7 +74,7 @@ export function JoinScreen({
         <button className="icon-btn" onClick={onHome} aria-label="Back to groups">
           <IconBack size={22} />
         </button>
-        <span className="join__brand">RupeeTrail</span>
+        <span className="join__brand">RupeeSplit</span>
       </header>
 
       {loading && <p className="hint join__loading">Opening the invite…</p>}

@@ -33,12 +33,29 @@ jobs:
         working-directory: mobile
         run: npx tsc --noEmit
 
+      # Android only installs an update when versionCode rises. Derive it from the
+      # run number so every build is installable over the previous one.
+      - name: Stamp build version
+        working-directory: mobile
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs')
+          const code = 1000 + Number(process.env.RUN_NUMBER || 1)
+          const config = JSON.parse(fs.readFileSync('app.json', 'utf8'))
+          config.expo.android.versionCode = code
+          config.expo.version = `2.0.${process.env.RUN_NUMBER || 1}`
+          fs.writeFileSync('app.json', JSON.stringify(config, null, 2) + '\n')
+          console.log(`versionCode=${code}`)
+          NODE
+
       - name: Prebuild Android
         working-directory: mobile
         env:
           EXPO_PUBLIC_API_BASE: https://rupeetrail-api.mogantipranavraj.workers.dev
-          EXPO_PUBLIC_VERSION_CODE: ${{ github.run_number }}
-          EXPO_PUBLIC_VERSION_NAME: ${{ github.ref_name }}
+          EXPO_PUBLIC_VERSION_CODE: ${{ 1000 + github.run_number }}
+          EXPO_PUBLIC_VERSION_NAME: 2.0.${{ github.run_number }}
         run: npx expo prebuild --platform android --no-install
 
       - name: Decode keystore
@@ -46,6 +63,35 @@ jobs:
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > app/rupeetrail-release.jks
+
+      - name: Wire release signing
+        working-directory: mobile/android
+        run: |
+          node - <<'NODE'
+          const fs = require('fs')
+          const path = 'app/build.gradle'
+          let gradle = fs.readFileSync(path, 'utf8')
+          if (!gradle.includes('signingConfigs.release')) {
+            gradle = gradle.replace(
+              /signingConfigs\s*{/,
+              `signingConfigs {\n        release {\n            storeFile file("rupeetrail-release.jks")\n            storePassword System.getenv("RELEASE_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("RELEASE_KEY_ALIAS")\n            keyPassword System.getenv("RELEASE_KEY_PASSWORD")\n        }`
+            )
+            // Point only the release build type at the release key, leaving the
+            // generated debug signing alone. Scope the edit to buildTypes first.
+            const idx = gradle.indexOf('buildTypes {')
+            const head = gradle.slice(0, idx)
+            const tail = gradle.slice(idx)
+            const rel = tail.indexOf('release {')
+            const fixed =
+              tail.slice(0, rel) +
+              tail.slice(rel).replace('signingConfig signingConfigs.debug', 'signingConfig signingConfigs.release')
+            gradle = head + fixed
+            fs.writeFileSync(path, gradle)
+            console.log('release signing wired')
+          } else {
+            console.log('release signing already present')
+          }
+          NODE
 
       - name: Build release APK
         working-directory: mobile/android
@@ -55,26 +101,29 @@ jobs:
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: ./gradlew assembleRelease
 
-      - name: Compute hash and size
-        id: meta
+      - name: Verify the APK
         working-directory: mobile/android
         run: |
           APK=app/build/outputs/apk/release/app-release.apk
-          echo "sha256=$(sha256sum $APK | cut -d' ' -f1)" >> $GITHUB_OUTPUT
-          echo "size=$(stat -c %s $APK)" >> $GITHUB_OUTPUT
+          test -f "$APK"
+          ls -lh "$APK"
+          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify --print-certs "$APK" | head -5
+          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt" dump badging "$APK" | grep -E "package:|application-label:" | head -3
 
-      - name: Upload APK to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: mobile/android/app/build/outputs/apk/release/app-release.apk
-          tag_name: ${{ github.ref_name }}
+      - name: Publish to the stable release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Print ANDROID_* values
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "ANDROID_VERSION_CODE=${{ github.run_number }}"
-          echo "ANDROID_VERSION_NAME=${{ github.ref_name }}"
-          echo "ANDROID_APK_SHA256=${{ steps.meta.outputs.sha256 }}"
-          echo "ANDROID_APK_SIZE=${{ steps.meta.outputs.size }}"
-          echo "Set ANDROID_APK_URL to the release asset URL and ANDROID_RELEASE_NOTES, then redeploy the Worker."
+          # The deployed Worker's update manifest points at this stable URL, so
+          # replacing the asset here ships a new APK without touching Cloudflare.
+          gh release view main >/dev/null 2>&1 || gh release create main \
+            --title "RupeeSplit (stable)" \
+            --notes "Latest signed RupeeSplit Android build." || true
+          gh release upload main mobile/android/app/build/outputs/apk/release/app-release.apk#app-release.apk --clobber
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rupeesplit-apk-${{ github.run_number }}
+          path: mobile/android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30

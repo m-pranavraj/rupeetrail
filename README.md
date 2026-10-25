@@ -1,10 +1,10 @@
-# RupeeTrail
+# RupeeSplit
 
 Shared expense ledger for trips, flats, couples and teams in India. Log what
 each person actually paid, see exactly how every share was calculated, and
 settle with a UPI link instead of a spreadsheet argument.
 
-Built from the RupeeTrail PRD (Research Edition 2.0, 22 Oct 2026).
+Built from the RupeeSplit PRD (Research Edition 2.0, 22 Oct 2026).
 
 ## How it works now
 
@@ -25,9 +25,9 @@ Built from the RupeeTrail PRD (Research Edition 2.0, 22 Oct 2026).
 - **Live.** Every write is broadcast on the group's realtime room. Open phones
   reload the authoritative snapshot on `ready` and on every revision broadcast,
   and fall back to polling if realtime is unavailable.
-- **Scan a bill, on the phone.** *Capture Bill* greyscales and contrast-boosts
-  the photo on a canvas, reads it with Tesseract OCR in a browser worker, then
-  extracts line items with quantity and rate, CGST/SGST, any discount and the
+- **Scan a bill, on the phone.** *Capture Bill* reads the photo entirely on the
+  device — Tesseract in a browser worker on the web, Google ML Kit in the APK —
+  then extracts line items with quantity and rate, CGST/SGST, any discount and the
   printed total. The numbers are cross-checked against each other, so a receipt
   that does not add up is flagged instead of silently trusted. Nothing is
   uploaded and no API key is involved.
@@ -77,11 +77,29 @@ typed data layer). See [SUPABASE.md](SUPABASE.md) to switch it on.
 
 ## Native Android app
 
-The app in `mobile/` is a React Native (Expo) build of the same ledger: phone +
-PIN accounts, groups, expenses, balances, settlement recording, adding people who
-have not joined, and a prompt when a newer APK exists. It shares the money maths
-with the web app (`scripts/sync-native-logic.mjs` copies the pure modules), and it
-is **online-only** by design: a shared ledger needs the server.
+The app in `mobile/` is the full React Native (Expo) client: phone + PIN accounts,
+groups, expenses, balances, settlement recording, adding people who have not joined,
+a prompt when a newer APK exists, and the same feature set as the web app:
+
+- **Four split modes** — equal, exact rupees, percentages and shares, with a live
+  per-person preview that uses the same paise-exact maths as the server.
+- **Several payers** on one expense, each with their own amount.
+- **Bill scanning on the phone** — the camera or gallery feeds Google ML Kit text
+  recognition locally, then the shared receipt parser extracts line items, GST,
+discounts and the printed total. Nothing is uploaded and no key is needed.
+- **Quick add** — type “Dinner 1200, Priya 400, I paid” and the roster-aware parser
+  fills the amount, people and split mode.
+- **Trip map** — expenses can carry a place tag; the Map tab draws them on a
+  keyless OpenStreetMap raster map with the amount pinned at each stop, plus a
+  per-stop list and the trip wrap total.
+- **Disputes, acknowledgements, CSV export, UPI pay links, group rename/close,**
+  invite code copy/share plus WhatsApp, and per-member balance explanations.
+- **Animation and haptics** — spring bottom sheets, staggered lists, animated tabs
+  and gradient surfaces throughout.
+
+It shares the pure money/parsing modules with the web app
+(`scripts/sync-native-logic.mjs` copies them), and it is **online-only** by design:
+a shared ledger needs the server.
 
 **Download:** https://github.com/m-pranavraj/rupeetrail/releases/latest — install
 with "allow installs from this source" enabled, then sign in with your number.
@@ -121,7 +139,7 @@ an empty ledger.
 
 ```bash
 npm run typecheck      # browser app + Worker
-npm test               # 28 tests: split/balance/settlement maths + real DOM flows
+npm test               # 44 tests: split/balance/settlement maths + real DOM flows
 npm run smoke          # end-to-end API test against a running dev stack
 ```
 
@@ -143,14 +161,19 @@ then deploy the manifest. `wrangler.jsonc` is for local development only.
 
 ## Boundaries
 
-- RupeeTrail is not a payment app: it never holds money, never talks to a PSP,
+- RupeeSplit is not a payment app: it never holds money, never talks to a PSP,
   and never claims a UPI payment happened. It records what people say happened.
 - Invite links are bearer access. Anyone with the link can join until the group
   is closed; members can be removed only by leaving the group on their device.
 - Writes require connectivity. Cached snapshots are readable offline, but the
   app does not queue offline mutations.
-- The native app does not include bill scanning or voice capture yet: Tesseract
-  and the Web Speech API are browser features, and each needs a native
-  replacement before it can ship in the APK.
-- Not built yet: receipt OCR in the native app, recurring expenses, budgets/charts, provider-level
-  settlement verification, and a close-out report for finished trips.
+- Bill scanning differs by platform: the browser uses Tesseract in a worker, the
+  APK uses Google ML Kit on-device. Both feed the same parser, so the extracted
+  numbers behave the same way.
+- Dictation is web-only (Web Speech API). The APK offers **Quick add** — the same
+  natural-language parser, typed instead of spoken — so it needs no microphone
+  permission or speech engine.
+- Place tags are stored on this phone, keyed by expense id, because the ledger API
+  has no location field. Other members see the expense, not your pin.
+- Not built yet: recurring expenses, budgets, provider-level settlement
+  verification, and automated recurring reminders for finished trips.

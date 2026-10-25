@@ -1,4 +1,4 @@
-# Render Blueprint for the RupeeTrail API.
+# Render Blueprint for the RupeeSplit API.
 #
 # The API is still the Cloudflare Worker in worker/index.ts. This blueprint
 # targets the Node port described in docs/launch-plan.md, which will live in

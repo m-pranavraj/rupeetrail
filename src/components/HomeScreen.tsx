@@ -40,7 +40,7 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
             ₹
           </span>
           <div>
-            <p className="brand__name">RupeeTrail</p>
+            <p className="brand__name">RupeeSplit</p>
             <p className="brand__tag">Every rupee, accounted for.</p>
           </div>
         </div>
@@ -143,6 +143,14 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
           <span className="dot dot--ok" />
           Shared ledger · updates live across everyone’s phones
         </p>
+        <a
+          className="govira-link"
+          href="https://govira.tech"
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          Powered by Govira Technologies ↗
+        </a>
       </footer>
 
       <CreateGroupSheet

@@ -1,4 +1,4 @@
-/** RupeeTrail on-device AI — everything runs in the browser.
+/** RupeeSplit on-device AI — everything runs in the browser.
  *
  * - Bill photos: canvas clean-up, then Tesseract.js OCR, then the structured
  *   receipt parser (line items, quantity, CGST/SGST, discount, reconciliation).

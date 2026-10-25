@@ -149,7 +149,7 @@ that go into the `ANDROID_*` variables. It needs the keystore secrets above.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| App says "Can't reach RupeeTrail" on every call | Built without `EXPO_PUBLIC_API_BASE`, or the host blocks cleartext | Rebuild with the HTTPS API base |
+| App says "Can't reach RupeeSplit" on every call | Built without `EXPO_PUBLIC_API_BASE`, or the host blocks cleartext | Rebuild with the HTTPS API base |
 | Update prompt never appears | `ANDROID_APK_URL` unset, or `ANDROID_VERSION_CODE` not higher than the installed build | Set both, redeploy |
 | "Update" downloads but will not install | Unknown-source installs disabled for the browser | Allow installs for that app, then retry |
 | Postgres connection refused from Render | Direct Supabase host (IPv6) | Use the session pooler on port 5432 |

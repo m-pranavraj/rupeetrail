@@ -15,12 +15,15 @@ export function upiPayLink(input: {
   amountPaise: number
   note?: string
 }): string {
-  const params = new URLSearchParams({
-    pa: input.upiId,
-    pn: input.payeeName,
-    am: (input.amountPaise / 100).toFixed(2),
-    cu: 'INR',
-  })
-  if (input.note) params.set('tn', input.note.slice(0, 50))
-  return `upi://pay?${params.toString()}`
+  // Built by hand: React Native's URLSearchParams polyfill is not dependable on
+  // every runtime, and this link is the same string either way.
+  const params: [string, string][] = [
+    ['pa', input.upiId],
+    ['pn', input.payeeName],
+    ['am', (input.amountPaise / 100).toFixed(2)],
+    ['cu', 'INR'],
+  ]
+  if (input.note) params.push(['tn', input.note.slice(0, 50)])
+  const query = params.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&')
+  return `upi://pay?${query}`
 }

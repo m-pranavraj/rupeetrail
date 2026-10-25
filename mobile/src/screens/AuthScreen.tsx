@@ -1,8 +1,20 @@
 import React, { useState } from 'react'
-import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native'
-import { Banner, Body, Button, Field, Muted, Screen, Subtitle, Title } from '../components/ui'
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
+import { LinearGradient } from 'expo-linear-gradient'
+import {
+  Banner,
+  Button,
+  FadeIn,
+  Field,
+  Muted,
+  PressableScale,
+  Screen,
+  Subtitle,
+  tap,
+} from '../components/ui'
 import { useStore } from '../state'
-import { colors, radius, spacing } from '../theme'
+import { colors, gradients, radius, spacing } from '../theme'
 
 type Mode = 'signup' | 'signin'
 
@@ -13,9 +25,12 @@ export function AuthScreen() {
   const [phone, setPhone] = useState('')
   const [pin, setPin] = useState('')
   const [upiId, setUpi] = useState('')
+  const [reveal, setReveal] = useState(false)
   const [localError, setLocalError] = useState('')
 
   const switchMode = (next: Mode) => {
+    if (next === mode) return
+    tap()
     setMode(next)
     setLocalError('')
     clearMessages()
@@ -44,123 +59,159 @@ export function AuthScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: colors.bg }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <Screen>
-        <Body>
-          <View style={{ marginTop: spacing(8) }}>
-            <View style={styles.mark}>
-              <Text style={styles.markText}>₹</Text>
-            </View>
-            <Title>RupeeTrail</Title>
-            <Subtitle>
-              One number, one account. Log what each of you paid and settle without the spreadsheet
-              argument.
-            </Subtitle>
+    <Screen>
+      <FadeIn>
+        <View style={styles.markRow}>
+          <LinearGradient colors={gradients.primary} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.mark}>
+            <Text style={styles.markText}>₹</Text>
+          </LinearGradient>
+          <View style={{ marginLeft: spacing(3) }}>
+            <Text style={styles.brand}>RupeeSplit</Text>
+            <Text style={styles.brandSub}>by Govira Technologies</Text>
           </View>
+        </View>
 
-          <View style={styles.tabs}>
-            {(
-              [
-                { id: 'signup', label: 'New account' },
-                { id: 'signin', label: 'Sign in' },
-              ] as { id: Mode; label: string }[]
-            ).map((tab) => (
-              <Pressable
-                key={tab.id}
-                onPress={() => switchMode(tab.id)}
-                style={[styles.tab, mode === tab.id && styles.tabActive]}
-              >
-                <Text style={[styles.tabText, mode === tab.id && { color: colors.bg }]}>{tab.label}</Text>
+        <Text style={styles.headline}>
+          Split the trip{'\n'}not the friendship
+          <Text style={{ color: colors.accent }}>.</Text>
+        </Text>
+        <Subtitle>
+          One number, one account. Log what each of you paid, scan the bill, and settle with UPI without
+          the spreadsheet argument.
+        </Subtitle>
+      </FadeIn>
+
+      <FadeIn delay={100}>
+        <View style={styles.tabs}>
+          {(
+            [
+              { id: 'signup', label: 'New account' },
+              { id: 'signin', label: 'Sign in' },
+            ] as { id: Mode; label: string }[]
+          ).map((tab) => {
+            const active = mode === tab.id
+            return (
+              <Pressable key={tab.id} onPress={() => switchMode(tab.id)} style={styles.tab}>
+                {active ? (
+                  <LinearGradient
+                    colors={gradients.primary}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={StyleSheet.absoluteFill}
+                  />
+                ) : null}
+                <Text style={[styles.tabText, active && { color: colors.accentInk }]}>{tab.label}</Text>
               </Pressable>
-            ))}
-          </View>
+            )
+          })}
+        </View>
+      </FadeIn>
 
-          {mode === 'signup' && (
-            <Field
-              label="Your name"
-              value={name}
-              onChangeText={setName}
-              placeholder="e.g. Arjun"
-              autoCapitalize="words"
-              maxLength={40}
+      {mode === 'signup' ? (
+        <Field
+          label="Your name"
+          value={name}
+          onChangeText={setName}
+          placeholder="Arjun"
+          autoCapitalize="words"
+          maxLength={40}
+        />
+      ) : null}
+
+      <Field
+        label="Mobile number"
+        value={phone}
+        onChangeText={setPhone}
+        placeholder="9876543210"
+        keyboardType="number-pad"
+        maxLength={10}
+        hint="This number is your account. Only one account can use it."
+      />
+
+      <Field
+        label="PIN"
+        value={pin}
+        onChangeText={setPin}
+        placeholder="4–6 digits"
+        keyboardType="number-pad"
+        secureTextEntry={!reveal}
+        maxLength={6}
+        hint="Anyone with your number and PIN can open these ledgers."
+        right={
+          <Pressable onPress={() => setReveal((value) => !value)} hitSlop={10}>
+            <Ionicons
+              name={reveal ? 'eye-off-outline' : 'eye-outline'}
+              size={18}
+              color={colors.muted}
             />
-          )}
+          </Pressable>
+        }
+      />
 
-          <Field
-            label="Mobile number"
-            value={phone}
-            onChangeText={setPhone}
-            placeholder="9876543210"
-            keyboardType="number-pad"
-            maxLength={10}
-            hint="This number is your account. Only one account can use it."
-          />
+      {mode === 'signup' ? (
+        <Field
+          label="UPI id (optional)"
+          value={upiId}
+          onChangeText={setUpi}
+          placeholder="name@okhdfcbank"
+          autoCapitalize="none"
+          autoCorrect={false}
+          maxLength={100}
+          hint="So people can actually pay you from the settle screen."
+        />
+      ) : null}
 
-          <Field
-            label="PIN"
-            value={pin}
-            onChangeText={setPin}
-            placeholder="4–6 digits"
-            keyboardType="number-pad"
-            secureTextEntry
-            maxLength={6}
-            hint="Anyone with your number and PIN can open these ledgers."
-          />
+      {localError || error ? <Banner tone="error">{localError || error}</Banner> : null}
 
-          {mode === 'signup' && (
-            <Field
-              label="UPI id (optional)"
-              value={upiId}
-              onChangeText={setUpi}
-              placeholder="name@okhdfcbank"
-              autoCapitalize="none"
-              autoCorrect={false}
-              maxLength={100}
-              hint="So people can actually pay you from the settle screen."
-            />
-          )}
+      <Button
+        label={mode === 'signup' ? 'Create my account' : 'Sign in'}
+        onPress={() => void submit()}
+        loading={busy}
+      />
 
-          {(localError || error) && <Banner tone="error">{localError || error}</Banner>}
+      <Muted small>
+        {mode === 'signup'
+          ? 'Already have one? Tap Sign in above — your trips come back automatically.'
+          : 'New here? Create an account with just your number and a PIN.'}
+      </Muted>
 
-          <Button
-            label={mode === 'signup' ? 'Create account' : 'Sign in'}
-            onPress={() => void submit()}
-            loading={busy}
-          />
-
-          <View style={{ alignItems: 'center', marginTop: spacing(4) }}>
-            <Muted small>Powered by Govira · govira.tech</Muted>
-          </View>
-        </Body>
-      </Screen>
-    </KeyboardAvoidingView>
+      <PressableScale onPress={() => void Linking.openURL('https://govira.tech')}>
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>
+            Powered by Govira Technologies <Text style={{ color: colors.accent }}>↗</Text>
+          </Text>
+        </View>
+      </PressableScale>
+    </Screen>
   )
 }
 
 const styles = StyleSheet.create({
-  mark: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing(4),
+  markRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing(6) },
+  mark: { width: 56, height: 56, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  markText: { color: colors.accentInk, fontSize: 30, fontWeight: '900' },
+  brand: { color: colors.text, fontSize: 19, fontWeight: '900', letterSpacing: -0.4 },
+  brandSub: { color: colors.mutedDim, fontSize: 10.5, fontWeight: '600', marginTop: 2 },
+  headline: {
+    color: colors.text,
+    fontSize: 34,
+    fontWeight: '900',
+    letterSpacing: -1.2,
+    lineHeight: 39,
+    marginTop: spacing(7),
   },
-  markText: { color: '#062018', fontSize: 28, fontWeight: '900' },
   tabs: {
     flexDirection: 'row',
     backgroundColor: colors.surface,
-    borderRadius: radius.md,
+    borderRadius: radius.pill,
     padding: spacing(1),
     marginTop: spacing(6),
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.borderSoft,
+    gap: spacing(1),
   },
-  tab: { flex: 1, paddingVertical: spacing(2.5), borderRadius: radius.sm, alignItems: 'center' },
-  tabActive: { backgroundColor: colors.accent },
-  tabText: { color: colors.muted, fontWeight: '700', fontSize: 13 },
+  tab: { flex: 1, paddingVertical: spacing(2.6), borderRadius: radius.pill, alignItems: 'center', overflow: 'hidden' },
+  tabText: { color: colors.muted, fontWeight: '800', fontSize: 12.5 },
+  footer: { alignItems: 'center', marginTop: spacing(8) },
+  footerText: { color: colors.muted, fontSize: 11.5, fontWeight: '600' },
 })

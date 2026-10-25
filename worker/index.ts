@@ -1,5 +1,5 @@
 /**
- * RupeeTrail API — Cloudflare Worker on Sites.
+ * RupeeSplit API — Cloudflare Worker on Sites.
  *
  * A group ledger is one JSON document in D1, guarded by a revision number so
  * two people adding expenses at the same moment cannot silently overwrite each
@@ -1376,7 +1376,7 @@ export default {
       return await route(request, env, url)
     } catch (error) {
       if (error instanceof HttpError) return json({ error: error.message }, error.status)
-      console.error('rupeetrail api error', error)
+      console.error('rupeesplit api error', error)
       return json({ error: 'Something went wrong on the server. Try again.' }, 500)
     }
   },

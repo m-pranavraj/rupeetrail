@@ -1,5 +1,5 @@
 /**
- * HTTP client for the RupeeTrail API.
+ * HTTP client for the RupeeSplit API.
  *
  * Every call is absolute (the app has no same-origin server), and account /
  * membership tokens travel in headers so they never appear in a URL.
@@ -111,7 +111,7 @@ async function call<T>(path: string, options: CallOptions = {}): Promise<T> {
     throw new ApiError(
       controller.signal.aborted
         ? 'The server took too long to answer. Check your connection and try again.'
-        : "Can't reach RupeeTrail right now. Check your connection and try again.",
+        : "Can't reach RupeeSplit right now. Check your connection and try again.",
       0,
     )
   } finally {
@@ -218,6 +218,43 @@ export function addExpense(
     method: 'POST',
     auth,
     body: input,
+  })
+}
+
+export function updateExpense(
+  groupId: string,
+  auth: Credentials,
+  expenseId: string,
+  input: ExpenseInput,
+): Promise<GroupSnapshot> {
+  return call(`/api/groups/${encodeURIComponent(groupId)}/expenses/${encodeURIComponent(expenseId)}`, {
+    method: 'PATCH',
+    auth,
+    body: input,
+  })
+}
+
+export function resolveDispute(
+  groupId: string,
+  auth: Credentials,
+  expenseId: string,
+  resolution: string,
+): Promise<GroupSnapshot> {
+  return call(
+    `/api/groups/${encodeURIComponent(groupId)}/expenses/${encodeURIComponent(expenseId)}/resolve`,
+    { method: 'POST', auth, body: { resolution } },
+  )
+}
+
+export function patchMe(
+  groupId: string,
+  auth: Credentials,
+  patch: { name?: string; upiId?: string },
+): Promise<GroupSnapshot> {
+  return call(`/api/groups/${encodeURIComponent(groupId)}/me`, {
+    method: 'PATCH',
+    auth,
+    body: patch,
   })
 }
 
