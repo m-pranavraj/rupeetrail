@@ -13,6 +13,7 @@
       "bundleIdentifier": "app.rupeetrail"
     },
     "plugins": [
+      "./plugins/withMlKitNamespace",
       "expo-font",
       [
         "expo-splash-screen",
