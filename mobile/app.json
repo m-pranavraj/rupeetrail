@@ -17,7 +17,7 @@
                              "supportsTablet":  true,
                              "bundleIdentifier":  "app.rupeetrail"
                          },
-"plugins": ["react-native-google-mobile-ads"],
+"plugins": [["react-native-google-mobile-ads", {"androidAppId": "ca-app-pub-3030299487532175~5292137858"}]],
     "android": {
                                  "package":  "app.rupeetrail",
                                  "versionCode":  2,
