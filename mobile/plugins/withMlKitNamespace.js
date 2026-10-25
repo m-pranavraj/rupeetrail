@@ -6,8 +6,8 @@ const path = require('node:path')
  * @react-native-ml-kit/text-recognition 2.x predates AGP 8: its Android module
  * has no `namespace` and still puts a package attribute in its manifest, which
  * modern Android Gradle Plugin refuses to build. This plugin patches the two
- * files after install and before prebuild, and trims the unused OCR scripts
- * (Latin + Devanagari are the ones Indian bills need) to keep the APK smaller.
+ * files after install and before prebuild. The scripts stay as published: the
+ * module's Java references all of them, so removing a dependency breaks compile.
  */
 module.exports = function withMlKitNamespace(config) {
   return withDangerousMod(config, [
@@ -26,11 +26,6 @@ module.exports = function withMlKitNamespace(config) {
       }
       // The pinned build-tools fallback is ancient; let Gradle use the app's.
       gradle = gradle.replace(/\n\s*buildToolsVersion safeExtGet\([^\n]*\)/, '')
-      // Only the scripts this app offers need to be bundled.
-      gradle = gradle
-        .replace(/\n\s*\/\/[^\n]*\n\s*implementation 'com\.google\.mlkit:text-recognition-chinese:[^']*'/g, '')
-        .replace(/\n\s*\/\/[^\n]*\n\s*implementation 'com\.google\.mlkit:text-recognition-japanese:[^']*'/g, '')
-        .replace(/\n\s*\/\/[^\n]*\n\s*implementation 'com\.google\.mlkit:text-recognition-korean:[^']*'/g, '')
       fs.writeFileSync(gradlePath, gradle)
 
       if (fs.existsSync(manifestPath)) {
