@@ -12,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "rupeetrail-db",
-      "database_id": "00000000-0000-4000-8000-000000000000",
+      "database_id": "14d059b4-fe00-46f6-aa3d-9e1be2b505dd",
       "migrations_dir": "worker/migrations"
     }
   ],
