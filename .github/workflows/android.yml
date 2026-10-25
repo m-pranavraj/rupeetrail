@@ -1,0 +1,80 @@
+name: Android build & release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: mobile
+        run: npx tsc --noEmit
+
+      - name: Prebuild Android
+        working-directory: mobile
+        env:
+          EXPO_PUBLIC_API_BASE: https://rupeetrail-api.mogantipranavraj.workers.dev
+          EXPO_PUBLIC_VERSION_CODE: ${{ github.run_number }}
+          EXPO_PUBLIC_VERSION_NAME: ${{ github.ref_name }}
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Decode keystore
+        working-directory: mobile/android
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > app/rupeetrail-release.jks
+
+      - name: Build release APK
+        working-directory: mobile/android
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
+      - name: Compute hash and size
+        id: meta
+        working-directory: mobile/android
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          echo "sha256=$(sha256sum $APK | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "size=$(stat -c %s $APK)" >> $GITHUB_OUTPUT
+
+      - name: Upload APK to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mobile/android/app/build/outputs/apk/release/app-release.apk
+          tag_name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Print ANDROID_* values
+        run: |
+          echo "ANDROID_VERSION_CODE=${{ github.run_number }}"
+          echo "ANDROID_VERSION_NAME=${{ github.ref_name }}"
+          echo "ANDROID_APK_SHA256=${{ steps.meta.outputs.sha256 }}"
+          echo "ANDROID_APK_SIZE=${{ steps.meta.outputs.size }}"
+          echo "Set ANDROID_APK_URL to the release asset URL and ANDROID_RELEASE_NOTES, then redeploy the Worker."
