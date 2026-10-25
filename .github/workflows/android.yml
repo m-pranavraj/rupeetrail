@@ -41,17 +41,21 @@ jobs:
       # Android only installs an update when versionCode rises. Derive it from the
       # run number so every build is installable over the previous one.
       - name: Stamp build version
+        id: version
         working-directory: mobile
         env:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           node - <<'NODE'
           const fs = require('fs')
-          const code = 1000 + Number(process.env.RUN_NUMBER || 1)
+          const run = Number(process.env.RUN_NUMBER || 1)
+          const code = 1000 + run
+          const name = `2.0.${run}`
           const config = JSON.parse(fs.readFileSync('app.json', 'utf8'))
           config.expo.android.versionCode = code
-          config.expo.version = `2.0.${process.env.RUN_NUMBER || 1}`
+          config.expo.version = name
           fs.writeFileSync('app.json', JSON.stringify(config, null, 2) + '\n')
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `code=${code}\nname=${name}\n`)
           console.log(`versionCode=${code}`)
           NODE
 
@@ -59,8 +63,8 @@ jobs:
         working-directory: mobile
         env:
           EXPO_PUBLIC_API_BASE: https://rupeetrail-api.mogantipranavraj.workers.dev
-          EXPO_PUBLIC_VERSION_CODE: ${{ 1000 + github.run_number }}
-          EXPO_PUBLIC_VERSION_NAME: 2.0.${{ github.run_number }}
+          EXPO_PUBLIC_VERSION_CODE: ${{ steps.version.outputs.code }}
+          EXPO_PUBLIC_VERSION_NAME: ${{ steps.version.outputs.name }}
         run: npx expo prebuild --platform android --no-install
 
       - name: Decode keystore
