@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Banner, Body, Button, Card, Field, Muted, ModalSheet, Screen, Subtitle, Title } from '../components/ui'
 import { useStore } from '../state'
-import { AdBanner } from '../components/AdBanner'
 import { colors, radius, spacing } from '../theme'
 
 const EMOJI = ['🏖️', '🏠', '🍜', '🚗', '🎉', '🏔️']
@@ -125,7 +124,7 @@ export function GroupsScreen() {
           }}
         />
       </ModalSheet>
-      <AdBanner />
+
     </Screen>
   )
 }
