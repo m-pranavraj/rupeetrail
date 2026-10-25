@@ -80,11 +80,42 @@ export function computeBalances({ group, expenses, settlements }: BalanceInput):
   }
 
   // Settlements only count once both sides (or a provider) attest.
+  // Handle case where one party is not in the group by creating a temporary member entry.
+  const memberIdsInGroup = new Set(members.map((m) => m.id))
+  
   for (const s of settlements) {
     if (s.status !== 'confirmed') continue
     const from = byId.get(s.from)
     const to = byId.get(s.to)
-    if (!from || !to) continue
+    
+    // If from is not in group, create a temporary entry
+    if (!from) {
+      byId.set(s.from, {
+        memberId: s.from,
+        netPaise: 0,
+        entries: [],
+        paidPaise: 0,
+        sharePaise: 0,
+        settledInPaise: 0,
+        settledOutPaise: 0,
+      })
+      from = byId.get(s.from)
+    }
+    
+    // If to is not in group, create a temporary entry
+    if (!to) {
+      byId.set(s.to, {
+        memberId: s.to,
+        netPaise: 0,
+        entries: [],
+        paidPaise: 0,
+        sharePaise: 0,
+        settledInPaise: 0,
+        settledOutPaise: 0,
+      })
+      to = byId.get(s.to)
+    }
+    
     from.settledOutPaise += s.amountPaise
     from.netPaise += s.amountPaise
     from.entries.push({
@@ -105,10 +136,14 @@ export function computeBalances({ group, expenses, settlements }: BalanceInput):
     })
   }
 
+  // Also filter members to include any temporary ones added for settlements
+  const allMemberIds = new Set([...members.map((m) => m.id), ...settlements.flatMap((s) => [s.from, s.to]).filter((id) => !members.some((m) => m.id === id))])
+  const finalMembers = allMemberIds.map((id) => byId.get(id)!).filter(Boolean)
+  
   for (const bal of byId.values()) {
     bal.entries.sort((a, b) => b.date - a.date)
   }
-  return members.map((m) => byId.get(m.id)!)
+  return finalMembers
 }
 
 /** Total of all nets must be zero — the core reconciliation invariant. */

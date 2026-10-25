@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
+import React, { useEffect, useState } from 'react'
+import { KeyboardAvoidingView, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import {
@@ -27,6 +27,16 @@ export function AuthScreen() {
   const [upiId, setUpi] = useState('')
   const [reveal, setReveal] = useState(false)
   const [localError, setLocalError] = useState('')
+
+  useEffect(() => {
+    const subscription = Keyboard.addListener('keyboardWillShow', ({ endCoordinates }) => {
+      const scrollView = screenRef.current
+      if (scrollView) {
+        scrollView.scrollTo({ y: endCoordinates.height })
+      }
+    })
+    return () => subscription.remove()
+  }, [])
 
   const switchMode = (next: Mode) => {
     if (next === mode) return
@@ -59,7 +69,11 @@ export function AuthScreen() {
   }
 
   return (
-    <Screen>
+    <KeyboardAvoidingView
+      behavior="padding"
+      keyboardShouldPersistTaps="handled"
+      style={styles.container}
+    >
       <FadeIn>
         <View style={styles.markRow}>
           <LinearGradient colors={gradients.primary} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.mark}>
@@ -70,15 +84,6 @@ export function AuthScreen() {
             <Text style={styles.brandSub}>by Govira Technologies</Text>
           </View>
         </View>
-
-        <Text style={styles.headline}>
-          Split the trip{'\n'}not the friendship
-          <Text style={{ color: colors.accent }}>.</Text>
-        </Text>
-        <Subtitle>
-          One number, one account. Log what each of you paid, scan the bill, and settle with UPI without
-          the spreadsheet argument.
-        </Subtitle>
       </FadeIn>
 
       <FadeIn delay={100}>
@@ -182,36 +187,56 @@ export function AuthScreen() {
           </Text>
         </View>
       </PressableScale>
-    </Screen>
+    </KeyboardAvoidingView>
   )
 }
 
 const styles = StyleSheet.create({
-  markRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing(6) },
-  mark: { width: 56, height: 56, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  markText: { color: colors.accentInk, fontSize: 30, fontWeight: '900' },
-  brand: { color: colors.text, fontSize: 19, fontWeight: '900', letterSpacing: -0.4 },
-  brandSub: { color: colors.mutedDim, fontSize: 10.5, fontWeight: '600', marginTop: 2 },
+  container: {
+    flex: 1,
+  },
+  markRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing(4),
+    paddingTop: spacing(8),
+  },
+  mark: {
+    fontSize: 48,
+    color: colors.accent,
+  },
+  markText: {
+    fontSize: 48,
+    color: '#fff',
+    marginRight: spacing(1),
+  },
   headline: {
-    color: colors.text,
-    fontSize: 34,
-    fontWeight: '900',
-    letterSpacing: -1.2,
-    lineHeight: 39,
-    marginTop: spacing(7),
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: colors.onBackground,
+    textAlign: 'center',
+    paddingHorizontal: spacing(4),
+    paddingTop: spacing(8),
   },
   tabs: {
     flexDirection: 'row',
-    backgroundColor: colors.surface,
-    borderRadius: radius.pill,
-    padding: spacing(1),
-    marginTop: spacing(6),
-    borderWidth: 1,
-    borderColor: colors.borderSoft,
-    gap: spacing(1),
+    justifyContent: 'center',
+    marginHorizontal: spacing(4),
+    marginTop: spacing(4),
   },
-  tab: { flex: 1, paddingVertical: spacing(2.6), borderRadius: radius.pill, alignItems: 'center', overflow: 'hidden' },
-  tabText: { color: colors.muted, fontWeight: '800', fontSize: 12.5 },
-  footer: { alignItems: 'center', marginTop: spacing(8) },
+  tab: {
+    paddingHorizontal: spacing(2),
+    paddingVertical: spacing(1),
+    borderRadius: radius.pill,
+    marginHorizontal: spacing(1),
+  },
+  tabText: {
+    fontSize: 14,
+    color: colors.muted,
+  },
+  footer: {
+    alignItems: 'center',
+    marginTop: spacing(8),
+  },
   footerText: { color: colors.muted, fontSize: 11.5, fontWeight: '600' },
-})
+})

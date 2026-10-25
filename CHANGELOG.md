@@ -4,7 +4,7 @@
 
 The Android app catches up with the web app and gets its own design language.
 
-- **Rebrand:** RupeeTrail is now RupeeSplit everywhere users can see it — app
+- **Rebrand:** RupeeSplit is the rebranded name for all user-facing elements — app
   name, splash, screens, share text, web title and docs. Infrastructure names
   (Worker `rupeetrail-api`, D1 database, Android package id) stay stable so the
   live deployment and the update path are untouched.

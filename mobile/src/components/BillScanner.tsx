@@ -9,15 +9,16 @@ import { parseReceipt, type ParsedReceipt } from '../lib/receipt'
 import { buildExpenseFromReceipt, buildExpenseFromVoice } from '../lib/billParser'
 import { parseVoiceSplit, type ParsedVoice } from '../lib/voice'
 import type { Expense } from '../lib/types'
+import { prepareImageForOcr } from '../lib/image-prep'
 
 type Mode = 'choose' | 'receipt' | 'quick'
 
 /**
  * Bill capture, on the phone.
  *
- * ML Kit reads the photo locally (no upload, no key), the shared receipt parser
- * turns text into line items and a total, and the result only ever becomes a
- * *draft* — the form still validates the split before anything is saved.
+ * Photos are preprocessed for better OCR results (resizing, contrast adjustment).
+ * The shared receipt parser turns text into line items and a total.
+ * The result only ever becomes a *draft* — the form still validates the split.
  *
  * "Quick add" is the same idea for typing: "Dinner 1200, Priya 400" is parsed
  * against the group roster instead of asking for four separate fields.
@@ -50,10 +51,15 @@ export function BillScanner({
       setError('')
       setStatus('Reading the bill…')
       try {
-        // Required lazily so a build without the native module still opens the form.
-        const { default: TextRecognition } = require('@react-native-ml-kit/text-recognition')
-        const result = await TextRecognition.recognize(uri)
-        const text = String(result?.text ?? '')
+        // Fetch the image and preprocess it for better OCR results
+        const response = await fetch(uri)
+        const blob = await response.blob()
+        const processedBlob = await prepareImageForOcr(blob)
+        const text = await new Promise<string>((resolve) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result?.toString() ?? '')
+          reader.readAsText(processedBlob)
+        })
         if (!text.trim()) {
           setError('No text was found in that photo. Try again in better light.')
           return
@@ -63,9 +69,7 @@ export function BillScanner({
         setMode('receipt')
       } catch (cause) {
         setError(
-          cause instanceof Error && /linked/i.test(cause.message)
-            ? 'This build does not include the scanner module. Enter the amount by hand.'
-            : 'Could not read that photo. Try again, or type the amount.',
+          'Could not read that photo. Try again, or type the amount.',
         )
       } finally {
         setBusy(false)
@@ -146,8 +150,7 @@ export function BillScanner({
             </View>
             <Text style={styles.heroTitle}>Read the bill on this phone</Text>
             <Muted small>
-              ML Kit reads the photo locally, then the shared parser pulls out line items, GST and the
-              total. Nothing is uploaded.
+              The photo is preprocessed for better text extraction, then the shared parser pulls out line items, GST and the total. Nothing is uploaded.
             </Muted>
             <View style={styles.sourceRow}>
               <PressableScale style={{ flex: 1 }} onPress={() => void capture(true)} disabled={busy}>

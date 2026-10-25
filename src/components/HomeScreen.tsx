@@ -1,9 +1,9 @@
-import React, { useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import { useStore, type GroupSummary } from '../lib/store'
 import { formatPaise } from '../lib/money'
 import { isValidUpi } from '../lib/upi'
 import { Avatar, AvatarStack, EmptyState, Sheet } from './ui'
-import { IconArrowRight, IconPlus, IconShare, IconSpark, IconUsers } from './Icons'
+import { IconArrowRight, IconPlus, IconShare, IconSpark, IconUsers, Mic } from './Icons'
 
 const EMOJI_CHOICES = ['🏖️', '🏠', '✈️', '🎉', '🍻', '🏏', '🎓', '🚗', '🎿', '🍕', '💼', '🌮']
 
@@ -14,6 +14,64 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
   const [creating, setCreating] = useState(false)
   const [joining, setJoining] = useState(false)
   const [editingIdentity, setEditingIdentity] = useState(false)
+  const [voiceCommand, setVoiceCommand] = useState('')
+  const [voiceBusy, setVoiceBusy] = useState(false)
+  const [voiceError, setVoiceError] = useState('')
+  const [voiceTranscript, setVoiceTranscript] = useState('')
+
+  const loadVoiceRecognition = useCallback(() => {
+    // Load speech recognition lazily
+    if (typeof webkitSpeechRecognition !== 'undefined') {
+      const recognition = new webkitSpeechRecognition()
+      recognition.continuous = false
+      recognition.interimResults = true
+      recognition.onresult = (event) => {
+        const transcript = Array.from(event.results)
+          .map((result) => result[0].transcript)
+          .join('')
+        setVoiceTranscript(transcript)
+        setVoiceCommand(transcript)
+        // Process the voice transcript to extract group info
+        processVoiceTrip(transcript)
+      }
+      recognition.onerror = (event) => {
+        setVoiceError('Could not listen. Try again.')
+        setVoiceBusy(false)
+      }
+      recognition.onend = () => {
+        setVoiceBusy(false)
+      }
+      recognition.start()
+      setVoiceBusy(true)
+      return recognition
+    } else {
+      setVoiceError('Speech not supported in this browser.')
+      return null
+    }
+  }, [])
+
+  const processVoiceTrip = useCallback((transcript: string) => {
+    const lower = transcript.toLowerCase()
+    // Look for group name patterns like "Goa trip", "Goa long weekend"
+    const groupNameMatch = lower.match(/([a-z\s]+)\s*(trip|weekend|tour|vacation|dinner|party)/i)
+    const potentialName = groupNameMatch ? groupNameMatch[1].trim() : 'New Trip'
+    
+    // Look for expense patterns: "Dinner 2000, Priya 500"
+    const expenseMatch = lower.match(/(\d+[\s,]*)+(rupees?|rs|₹)/i)
+    
+    // Look for member names that might be mentioned
+    const knownMembers = membersFromGroups(summaries)
+    
+    // Create a new group with the parsed name
+    createGroup(potentialName, '🏖️').then((id) => {
+      // Could add initial expenses here based on the transcript
+      setVoiceError(`Group '${potentialName}' created. Share the link to add expenses.`)
+      setVoiceBusy(false)
+    }).catch((cause) => {
+      setVoiceError(cause instanceof Error ? cause.message : 'Could not create group.')
+      setVoiceBusy(false)
+    })
+  }, [createGroup, summaries])
 
   const totals = useMemo(() => {
     let owed = 0
@@ -103,6 +161,15 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
           <span>
             <strong>Join group</strong>
             <em>Use an invite code</em>
+          </span>
+        </button>
+        <button className="action-card" onClick={() => void loadVoiceRecognition()}>
+          <span className="action-card__icon">
+            <Mic size={18} />
+          </span>
+          <span>
+            <strong>Voice trip</strong>
+            <em>Describe your trip and expenses</em>
           </span>
         </button>
       </div>
