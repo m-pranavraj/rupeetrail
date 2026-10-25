@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Banner, Body, Button, Card, Field, Muted, ModalSheet, Screen, Subtitle, Title } from '../components/ui'
 import { useStore } from '../state'
-import { colors, radius, spacing } from '../theme'
+import { BannerAd, BannerAdSize, TestIds } from 'react-native-google-mobile-ads'
 
 const EMOJI = ['🏖️', '🏠', '🍜', '🚗', '🎉', '🏔️']
 
@@ -125,6 +125,7 @@ export function GroupsScreen() {
           }}
         />
       </ModalSheet>
+      <BannerAd unitId={TestIds.BANNER} size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER} />
     </Screen>
   )
 }
