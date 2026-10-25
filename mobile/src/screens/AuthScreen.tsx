@@ -131,9 +131,8 @@ export function AuthScreen() {
             loading={busy}
           />
 
-          <Muted small>
-            RupeeTrail never moves money and never sends an OTP. It records what each person says they
-            paid, and every payment needs both sides to confirm.
+          <Muted small style={{ textAlign: 'center', marginTop: spacing(4) }}>
+            Powered by Govira · govira.tech
           </Muted>
         </Body>
       </Screen>

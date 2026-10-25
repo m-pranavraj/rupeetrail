@@ -67,9 +67,8 @@ export function GroupsScreen() {
         <Button label="Create a group" onPress={() => { clearMessages(); setCreating(true) }} />
         <Button label="Join with a code" variant="soft" onPress={() => { clearMessages(); setJoining(true) }} />
 
-        <Muted small>
-          Your number is the account. Anyone who knows it and your PIN can open these ledgers, so keep
-          the PIN to yourself.
+        <Muted small style={{ textAlign: 'center', marginTop: spacing(4) }}>
+          Powered by Govira · govira.tech
         </Muted>
       </Body>
 
