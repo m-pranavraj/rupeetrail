@@ -107,6 +107,7 @@ interface StoreValue {
   openGroup: (groupId: string) => Promise<void>
   closeGroup: () => void
   refresh: () => Promise<void>
+  fetchGroupSummaries: () => Promise<void>
   leaveGroup: (groupId: string) => void
   dismiss: () => void
   notify: (message: string | null) => void
@@ -336,6 +337,15 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const refresh = useCallback(async () => {
+    const membership = membershipsRef.current.find((m) => m.groupId === activeIdRef.current)
+    if (membership) await loadGroup(membership)
+  }, [loadGroup])
+
+  /**
+   * Refresh the active group's summaries by fetching the latest snapshot from the server.
+   Useful after recording a settlement or adding/removing members/expenses.
+   */
+  const fetchGroupSummaries = useCallback(async () => {
     const membership = membershipsRef.current.find((m) => m.groupId === activeIdRef.current)
     if (membership) await loadGroup(membership)
   }, [loadGroup])
@@ -815,6 +825,7 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     openGroup,
     closeGroup,
     refresh,
+    fetchGroupSummaries,
     leaveGroup,
     dismiss,
     notify: setNotice,
