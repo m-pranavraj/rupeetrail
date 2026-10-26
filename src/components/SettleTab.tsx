@@ -16,6 +16,10 @@ const STATUS_META: Record<SettlementStatus, { label: string; tone: 'ok' | 'warn'
   disputed: { label: 'Disputed', tone: 'bad' },
 }
 
+function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 40)
+}
+
 export function SettleTab({
   group,
   expenses,
@@ -28,7 +32,9 @@ export function SettleTab({
   currentMemberId?: MemberId
 }) {
   const { recordSettlement, advanceSettlement } = useStore()
-  const [paying, setPaying] = useState<{ from: string; to: string; amount?: number } | null>(null)
+  const [paying, setPaying] = useState<{ from: string; to: string; amount?: number; manualFromName?: string; manualToName?: string } | null>(null)
+
+  type PayingState = typeof paying
 
   const balances = useMemo(
     () => computeBalances({ group, expenses, settlements }),
@@ -36,7 +42,13 @@ export function SettleTab({
   )
   const plan = useMemo(() => planSettlements(balances), [balances])
 
-  const name = (id: string) => group.members.find((m) => m.id === id)?.name ?? 'Member'
+  const name = (id: string) => {
+    if (id.startsWith('manual:')) {
+      const parts = id.split(':')
+      return parts.length >= 3 ? parts[2].replace(/-/g, ' ') : 'Someone'
+    }
+    return group.members.find((m) => m.id === id)?.name ?? 'Member'
+  }
   const member = (id: string) => group.members.find((m) => m.id === id)
   const activeSettlements = [...settlements].sort((a, b) => b.updatedAt - a.updatedAt)
   const closed = group.status === 'closed'
@@ -123,7 +135,7 @@ export function SettleTab({
 
       <div className="section-head section-head--tight">
         <h2>Payment history</h2>
-        <button className="text-btn" onClick={() => setPaying({ from: currentMemberId ?? '', to: '' })} disabled={closed}>
+        <button className="text-btn" onClick={() => setPaying({ from: currentMemberId ?? '', to: '', manualFromName: '', manualToName: '' })} disabled={closed}>
           Record manually
         </button>
       </div>
@@ -162,7 +174,7 @@ export function SettleTab({
                         className="btn btn--tiny btn--soft"
                         onClick={() => advanceSettlement(s.id, s.from, 'payer_confirmed')}
                       >
-                        I’ve paid
+                        I've paid
                       </button>
                     )}
                     {iAmReceiver && !s.receiverConfirmedAt && (
@@ -173,11 +185,19 @@ export function SettleTab({
                         I received it
                       </button>
                     )}
+                    {iAmPayer && !s.payerConfirmedAt && (
+                      <button
+                        className="btn btn--tiny btn--ghost"
+                        onClick={() => advanceSettlement(s.id, currentMemberId ?? 'manual:payer', 'payer_confirmed')}
+                      >
+                        Confirm received
+                      </button>
+                    )}
                     <button
                       className="btn btn--tiny btn--ghost"
-                      onClick={() => advanceSettlement(s.id, currentMemberId ?? '', 'disputed')}
+                      onClick={() => advanceSettlement(s.id, currentMemberId ?? 'manual:payer', 'disputed')}
                     >
-                      Something’s off
+                      Something's off
                     </button>
                   </div>
                 )}
@@ -192,7 +212,7 @@ export function SettleTab({
         group={group}
         initial={paying}
         onClose={() => setPaying(null)}
-        onSave={async (from, to, amountPaise, method, note) => {
+        onSave={async (from: string, to: string, amountPaise: number, method: Settlement['method'], note?: string) => {
           const ok = await recordSettlement(group.id, from, to, amountPaise, method, note)
           if (ok) setPaying(null)
         }}
@@ -210,7 +230,7 @@ function RecordPaymentSheet({
 }: {
   open: boolean
   group: Group
-  initial: ({ from: string; to: string; amount?: number } & Partial<Transfer>) | null
+  initial: ({ from: string; to: string; amount?: number; manualFromName?: string; manualToName?: string }) | null
   onClose: () => void
   onSave: (
     from: string,
@@ -227,9 +247,11 @@ function RecordPaymentSheet({
   const [method, setMethod] = useState<Settlement['method']>('upi')
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
+  const [manualFromName, setManualFromName] = useState('')
+  const [manualToName, setManualToName] = useState('')
 
   // Reset local state whenever a fresh sheet opens with new prefill data.
-  const signature = `${open}-${initial?.from}-${initial?.to}-${initial?.amount}`
+  const signature = `${open}-${initial?.from}-${initial?.to}-${initial?.amount}-${initial?.manualFromName ?? ''}-${initial?.manualToName ?? ''}`
   const [lastSignature, setLastSignature] = useState(signature)
   if (signature !== lastSignature) {
     setLastSignature(signature)
@@ -239,15 +261,23 @@ function RecordPaymentSheet({
     setError('')
     setNote('')
     setMethod('upi')
+    setManualFromName((initial as unknown as { manualFromName?: string }).manualFromName ?? '')
+    setManualToName((initial as unknown as { manualToName?: string }).manualToName ?? '')
   }
+
+  const fromManual = from === 'manual'
+  const toManual = to === 'manual'
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     const paise = parseRupees(amount)
-    if (!from || !to) return setError('Pick who paid and who received.')
-    if (from === to) return setError('Payer and receiver must be different people.')
+    if (fromManual && !manualFromName.trim()) return setError('Enter the name of the person who paid.')
+    if (toManual && !manualToName.trim()) return setError('Enter the name of the person who received.')
+    const resolvedFrom = fromManual ? `manual:from:${slugify(manualFromName.trim())}` : from
+    const resolvedTo = toManual ? `manual:to:${slugify(manualToName.trim())}` : to
+    if (resolvedFrom === resolvedTo) return setError('Payer and receiver must be different people.')
     if (paise === null || paise <= 0) return setError('Enter an amount greater than zero.')
-    await onSave(from, to, paise, method, note)
+    await onSave(resolvedFrom, resolvedTo, paise, method, note)
   }
 
   return (
@@ -255,32 +285,59 @@ function RecordPaymentSheet({
       open={open}
       onClose={onClose}
       title="Record a payment"
-      subtitle="Entries stay “awaiting confirmation” until both sides agree."
+      subtitle="You can record a payment even if the person is not in the group yet — just type their name."
     >
       <form className="form" onSubmit={submit}>
         <div className="field-row">
           <label className="field">
-            <span>From</span>
-            <select value={from} onChange={(e) => setFrom(e.target.value)}>
-              <option value="">Select member</option>
+            <span>From (payer)</span>
+            <select value={from} onChange={(e) => { setFrom(e.target.value); setManualFromName('') }}>
+              <option value="">Select who paid</option>
               {active.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
                 </option>
               ))}
+              <option value="manual">Someone not in the group...</option>
             </select>
           </label>
+          {fromManual && (
+            <label className="field">
+              <span>Name of person who paid</span>
+              <input
+                value={manualFromName}
+                onChange={(e) => setManualFromName(e.target.value)}
+                placeholder="e.g. Priya Sharma"
+                autoFocus
+              />
+            </label>
+          )}
+        </div>
+
+        <div className="field-row">
           <label className="field">
-            <span>To</span>
-            <select value={to} onChange={(e) => setTo(e.target.value)}>
-              <option value="">Select member</option>
+            <span>To (receiver)</span>
+            <select value={to} onChange={(e) => { setTo(e.target.value); setManualToName('') }}>
+              <option value="">Select who received</option>
               {active.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
                 </option>
               ))}
+              <option value="manual">Someone not in the group...</option>
             </select>
           </label>
+          {toManual && (
+            <label className="field">
+              <span>Name of person who received</span>
+              <input
+                value={manualToName}
+                onChange={(e) => setManualToName(e.target.value)}
+                placeholder="e.g. Rahul Kumar"
+                autoFocus
+              />
+            </label>
+          )}
         </div>
 
         <label className="field field--amount">
@@ -309,7 +366,7 @@ function RecordPaymentSheet({
 
         <label className="field">
           <span>Note (optional)</span>
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="UPI ref, “paid in cash”, etc." />
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder='UPI ref, "paid in cash", etc.' />
         </label>
 
         {error && <p className="form-error">{error}</p>}

@@ -1,0 +1,58 @@
+name: Web build & release
+
+on:
+  workflow_dispatch:
+  # Optional: also trigger on pushes to main (excluding the rupeetrail submodule)
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'rupeetrail/**'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      VITE_API_BASE: https://rupeetrail-api.mogantipranavraj.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build Vite
+        run: npm run build
+
+      - name: Build Worker
+        run: npm run build:worker
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rupeesplit-web-${{ github.run_number }}
+          path: dist/
+          retention-days: 7
+
+      - name: Publish GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/
+
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: actions/deploy-pages@v4

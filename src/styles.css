@@ -1322,6 +1322,53 @@ h3 {
   flex-wrap: wrap;
 }
 
+/* Voice confirmation dialog ───────────────────────────────────────────── */
+.voice-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+
+.voice-confirm__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.voice-confirm__card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(90vw, 360px);
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.voice-confirm__card h3 {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.voice-confirm__card p {
+  margin: 0 0 24px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.voice-confirm__actions {
+  display: flex;
+  gap: 12px;
+}
+
+.voice-confirm__actions .btn {
+  flex: 1;
+}
+
 /* ---------- buttons & pills ---------- */
 
 .btn {

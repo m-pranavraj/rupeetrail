@@ -3,7 +3,13 @@ import { useStore, type GroupSummary } from '../lib/store'
 import { formatPaise } from '../lib/money'
 import { isValidUpi } from '../lib/upi'
 import { Avatar, AvatarStack, EmptyState, Sheet } from './ui'
-import { IconArrowRight, IconPlus, IconShare, IconSpark, IconUsers, Mic } from './Icons'
+import { IconArrowRight, IconPlus, IconShare, IconSpark, IconUsers, IconMic, IconMapPin } from './Icons'
+import { parseVoiceCommand } from '../lib/ondevice-ai'
+import { TextVoiceInput } from './TextVoiceInput'
+import { MicButton } from './MicButton'
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(HomeScreen as any).default = 'ic802344172_home_screen';
 
 const EMOJI_CHOICES = ['🏖️', '🏠', '✈️', '🎉', '🍻', '🏏', '🎓', '🚗', '🎿', '🍕', '💼', '🌮']
 
@@ -11,6 +17,8 @@ const AVATAR_COLORS = 8
 
 export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void }) {
   const { identity, summaries, createGroup, joinGroup, updateIdentity, signOut } = useStore()
+  const identityId = identity?.id ?? ''
+  const identityName = identity?.name ?? ''
   const [creating, setCreating] = useState(false)
   const [joining, setJoining] = useState(false)
   const [editingIdentity, setEditingIdentity] = useState(false)
@@ -18,356 +26,532 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
   const [voiceBusy, setVoiceBusy] = useState(false)
   const [voiceError, setVoiceError] = useState('')
   const [voiceTranscript, setVoiceTranscript] = useState('')
+  const [pendingVoiceAction, setPendingVoiceAction] = useState<{ action: string; confirm: () => void; cancel: () => void } | null>(null)
 
-  const loadVoiceRecognition = useCallback(() => {
-    // Load speech recognition lazily
-    if (typeof webkitSpeechRecognition !== 'undefined') {
-      const recognition = new webkitSpeechRecognition()
-      recognition.continuous = false
-      recognition.interimResults = true
-      recognition.onresult = (event) => {
-        const transcript = Array.from(event.results)
-          .map((result) => result[0].transcript)
-          .join('')
-        setVoiceTranscript(transcript)
-        setVoiceCommand(transcript)
-        // Process the voice transcript to extract group info
-        processVoiceTrip(transcript)
-      }
-      recognition.onerror = (event) => {
-        setVoiceError('Could not listen. Try again.')
-        setVoiceBusy(false)
-      }
-      recognition.onend = () => {
-        setVoiceBusy(false)
-      }
-      recognition.start()
-      setVoiceBusy(true)
-      return recognition
-    } else {
-      setVoiceError('Speech not supported in this browser.')
-      return null
+  const startVoice = useCallback(() => {
+    if (typeof window === 'undefined') {
+      setVoiceError('Voice input is not supported in this browser.')
+      return
     }
-  }, [])
+    const rawCtor = ((window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown }).SpeechRecognition ?? (window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown }).webkitSpeechRecognition) as typeof globalThis.SpeechRecognition | undefined
+    if (!rawCtor) {
+      setVoiceError('Voice input is not supported in this browser.')
+      return
+    }
+    const recognition = new rawCtor() as unknown as {
+      lang: string
+      continuous: boolean
+      interimResults: boolean
+      maxAlternatives: number
+      start: () => void
+      stop: () => void
+      onresult: ((event: unknown) => void) | null
+      onerror: ((event: unknown) => void) | null
+      onend: (() => void) | null
+    }
+    recognition.lang = 'en-IN'
+    recognition.continuous = false
+    recognition.interimResults = false
+    recognition.maxAlternatives = 1
+    setVoiceBusy(true)
+    setVoiceError('')
+    setVoiceTranscript('')
+    recognition.onresult = (event: unknown) => {
+      const e = event as unknown as { results: { 0: { 0: { transcript: string } } }[] }
+      const transcript = Array.from(e.results)
+        .map((result) => (result[0] as unknown as { transcript: string }).transcript)
+        .join('')
+      setVoiceTranscript(transcript)
 
-  const processVoiceTrip = useCallback((transcript: string) => {
-    const lower = transcript.toLowerCase()
-    // Look for group name patterns like "Goa trip", "Goa long weekend"
-    const groupNameMatch = lower.match(/([a-z\s]+)\s*(trip|weekend|tour|vacation|dinner|party)/i)
-    const potentialName = groupNameMatch ? groupNameMatch[1].trim() : 'New Trip'
-    
-    // Look for expense patterns: "Dinner 2000, Priya 500"
-    const expenseMatch = lower.match(/(\d+[\s,]*)+(rupees?|rs|₹)/i)
-    
-    // Look for member names that might be mentioned
-    const knownMembers = membersFromGroups(summaries)
-    
-    // Create a new group with the parsed name
-    createGroup(potentialName, '🏖️').then((id) => {
-      // Could add initial expenses here based on the transcript
-      setVoiceError(`Group '${potentialName}' created. Share the link to add expenses.`)
+      // Use the general-purpose AI command engine
+      const ctx = {
+        myId: identityId,
+        myName: identityName,
+        groups: summaries.map((s) => ({ id: s.groupId, name: s.name })),
+        members: [],
+        currentGroupId: undefined,
+      }
+      const parsed = parseVoiceCommand(transcript, ctx)
+
+      if (parsed.command?.type === 'create_group') {
+        setCreating(true)
+        createGroup(parsed.command.name, parsed.command.emoji)
+          .then(() => {
+            setVoiceCommand(`Created “${parsed.command.name}” — share the invite link to add people.`)
+            setVoiceBusy(false)
+          })
+          .catch((cause) => {
+            setVoiceError(cause instanceof Error ? cause.message : 'Could not create group.')
+            setVoiceBusy(false)
+          })
+      } else if (parsed.command?.type === 'join_group') {
+        setJoining(true)
+        joinGroup(parsed.command.code)
+          .then(() => {
+            setVoiceCommand(`Joined the group — you're in.`)
+            setVoiceBusy(false)
+          })
+          .catch((cause) => {
+            setVoiceError(cause instanceof Error ? cause.message : 'Could not join.')
+            setVoiceBusy(false)
+          })
+      } else if (parsed.command?.type === 'add_expense' && parsed.command.amountPaise >= 100) {
+        const confirmedDesc = parsed.command.description
+        const confirmedAmount = parsed.command.amountPaise
+        const confirmedSplitMode = parsed.command.splitMode
+        const confirmedPayerId = parsed.command.payerId
+        const confirmedParticipantIds = parsed.command.participantIds
+        const confirmedSplitModeStr = confirmedSplitMode === 'equal' ? 'equally' : confirmedSplitMode === 'exact' ? 'by exact amounts' : 'by percentage'
+
+        setPendingVoiceAction({
+          action: `Add expense “${confirmedDesc}” for ₹${(confirmedAmount / 100).toFixed(2)} split ${confirmedSplitModeStr} among ${confirmedParticipantIds.length} person${confirmedParticipantIds.length === 1 ? '' : 's'}?`,          confirm: async () => {
+                    setPendingVoiceAction(null)
+                    setVoiceCommand('Adding expense now...')
+                    try {
+                      const store = useStore.getState()
+                      const group = summaries.length > 0 ? summaries[0] : null
+                      if (!group) throw new Error('No group open')
+                      const payerId = confirmedPayerId || store.identity.id
+
+                      // If the payer isn't a group member yet, add them on the fly so the
+                      // balance actually moves against someone real.
+                      let finalPayerId = payerId
+                      if (group.members.every((m) => m.id !== payerId)) {              finalPayerId = await store.enrollAsMember(group.groupId, payerId, confirmedDesc)
+                      }
+
+                      await store.addExpense(group.groupId, {
+                        description: confirmedDesc,
+                        amountPaise: confirmedAmount,
+                        date: Date.now(),
+                        category: 'other',
+                        payers: [{ memberId: finalPayerId, amountPaise: confirmedAmount }],
+                        split: { mode: confirmedSplitMode, participants: confirmedParticipantIds },
+                      })
+                      setVoiceCommand(`Expense added — ₹${(confirmedAmount / 100).toFixed(2)} split among ${confirmedParticipantIds.length} people.`)
+                    } catch (cause) {
+                      setVoiceError(cause instanceof Error ? cause.message : 'Could not add expense.')
+                    }
+
+                    // Refetch group summaries right after so the home list and any voice
+                    // confirmation reflect the newly-enrolled member immediately.
+                    void store.fetchGroupSummaries()
+            setVoiceBusy(false)
+          },
+          cancel: () => {
+            setPendingVoiceAction(null)
+            setVoiceCommand('Cancelled. Try a different command.')
+            setVoiceBusy(false)
+          },
+        })
+      } else if (parsed.command?.type === 'delete_expense') {
+        const targetExpenseId = parsed.command.expenseId
+
+        setPendingVoiceAction({
+          action: `Delete the most recent expense? This cannot be undone.`,
+          confirm: async () => {
+            setPendingVoiceAction(null)
+            setVoiceCommand('Deleting expense...')
+            try {
+              const store = useStore.getState()
+              const theGroup = summaries[0] ?? null
+              if (!theGroup) throw new Error('No group open')
+              const expenses = store.expensesByGroup[theGroup.groupId] ?? []
+              const sorted = [...expenses].sort((a, b) => b.date - a.date)
+              const target = targetExpenseId === '__last__' ? sorted[0] : expenses.find((e) => e.id === targetExpenseId)
+              if (!target) throw new Error('Expense not found')
+              await store.deleteExpense(theGroup.groupId, target.id)
+              setVoiceCommand('Expense deleted.')
+            } catch (cause) {
+              setVoiceError(cause instanceof Error ? cause.message : 'Could not delete expense.')
+            }
+            setVoiceBusy(false)
+          },
+          cancel: () => {
+            setPendingVoiceAction(null)
+            setVoiceCommand('Cancelled.')
+            setVoiceBusy(false)
+          },
+        })
+      } else if (parsed.command?.type === 'record_settlement') {
+        const fromId = parsed.command.fromId
+        const toId = parsed.command.toId
+        const amountPaise = parsed.command.amountPaise
+        const groupId = parsed.command.groupId
+        const method = parsed.command.method
+
+        setPendingVoiceAction({
+          action: `Record ₹${(amountPaise / 100).toFixed(2)} ${fromId.startsWith('manual:') ? 'from someone' : ''} to you?`,
+          confirm: async () => {
+            setPendingVoiceAction(null)
+            setVoiceCommand('Recording settlement...')
+            try {
+              const store = useStore.getState()
+              await store.recordSettlement(
+                groupId,
+                fromId,
+                toId,
+                amountPaise,
+                method,
+              )
+              // Refresh summaries so balances update immediately after settlement
+              void store.fetchGroupSummaries()
+              setVoiceCommand(parsed.reply)
+            } catch (cause) {
+              setVoiceError(cause instanceof Error ? cause.message : 'Could not record settlement.')
+            }
+            setVoiceBusy(false)
+          },
+          cancel: () => {
+            setPendingVoiceAction(null)
+            setVoiceCommand('Cancelled.')
+            setVoiceBusy(false)
+          },
+        })
+      } else if (parsed.ok) {
+        setVoiceCommand(parsed.reply)
+        setVoiceBusy(false)
+      } else {
+        setVoiceCommand(parsed.reply)
+        setVoiceBusy(false)
+      }
+    }
+    recognition.onerror = () => {
+      setVoiceError('Could not listen. Try again.')
       setVoiceBusy(false)
-    }).catch((cause) => {
-      setVoiceError(cause instanceof Error ? cause.message : 'Could not create group.')
+    }
+    recognition.onend = () => {
       setVoiceBusy(false)
-    })
-  }, [createGroup, summaries])
+    }
+    recognition.start()
+  }, [identityId, identityName, summaries, createGroup, joinGroup])
 
   const totals = useMemo(() => {
     let owed = 0
-    let owe = 0
-    let unknown = 0
+    let owedBy = 0
+    let groups = 0
+    let members = 0
+    let pending = 0
     for (const s of summaries) {
-      if (s.netPaise === null) {
-        unknown += 1
-        continue
+      groups++
+      members += s.memberCount
+      if (s.netPaise !== null) {
+        if (s.netPaise > 0) owed += s.netPaise
+        else owedBy -= s.netPaise
       }
-      if (s.netPaise > 0) owed += s.netPaise
-      else owe += -s.netPaise
+      if (s.hasPendingPayment) pending++
     }
-    return { owed, owe, unknown }
+    return { owed, owedBy, groups, members, pending }
   }, [summaries])
 
-  const openQuestions = summaries.filter((s) => s.hasOpenQuestion).length
+  const codeCell = (s: GroupSummary) => {
+    const cut = (phone: string) => {
+      const digits = phone.replace(/\D/g, '').slice(-10)
+      if (digits.length < 4) return phone
+      return `${digits.slice(0, 4)} **${digits.slice(-2)}`
+    }
+    return (
+      <span className="home__code">
+        <IconShare size={13} />
+        <code>{s.code}</code>
+      </span>
+    )
+  }
 
   return (
-    <div className="screen home">
-      <header className="home__masthead">
-        <div className="brand">
-          <span className="brand__mark" aria-hidden>
-            ₹
-          </span>
-          <div>
-            <p className="brand__name">RupeeSplit</p>
-            <p className="brand__tag">Every rupee, accounted for.</p>
-          </div>
+    <div className="home">
+      <header className="home__bar">
+        <div className="home__brand">
+          <span className="home__brand-mark">₹</span>
+          <span className="home__brand-name">RupeeSplit</span>
         </div>
-        <button className="identity" onClick={() => setEditingIdentity(true)}>
-          <Avatar name={identity?.name ?? 'You'} color={0} size={34} />
-          <span className="identity__text">
-            <span className="identity__label">You are</span>
-            <span className="identity__name">{identity?.name ?? 'Set up'}</span>
-          </span>
-        </button>
+        <nav className="home__nav">
+          {identity && (
+            <button className="avatar" title={identity.name} onClick={() => setEditingIdentity(true)}>
+              <Avatar name={identity.name} color={0} size={34} />
+            </button>
+          )}
+        </nav>
       </header>
 
-      <section className="summary-card" aria-label="Your overall position">
-        <div className="summary-card__row">
-          <div>
-            <p className="summary-card__label">
-              Across {summaries.length} group{summaries.length === 1 ? '' : 's'}
-            </p>
-            <p className="summary-card__value">
-              {totals.owed >= totals.owe && totals.owed > 0
-                ? `You get back ${formatPaise(totals.owed - totals.owe)}`
-                : totals.owe > 0
-                  ? `You owe ${formatPaise(totals.owe - totals.owed)}`
-                  : totals.unknown > 0
-                    ? 'Open a group to sync'
-                    : 'All square'}
-            </p>
-          </div>
-          <div className="summary-card__spark" aria-hidden>
-            <IconSpark size={26} />
-          </div>
+      <div className="home__voice-banner">
+        <span>🎙️</span>
+        <div>
+          <strong>Control the app with your voice</strong>
+          <p>
+            Say things like “Create a group called Goa trip”, “Dinner 1256 split between 5 of us”, “I got 500 rupees
+            from Priya”, “AI split this bill”, “Show me balances”, or “Delete the last expense”.
+            The AI understands natural language and can smart-split bills, record payments, and manage everything by voice.
+          </p>
         </div>
-        <div className="summary-card__split">
-          <span>
-            <em>Owed to you</em>
-            <strong className="pos">{formatPaise(totals.owed)}</strong>
-          </span>
-          <span className="summary-card__divider" aria-hidden />
-          <span>
-            <em>You owe</em>
-            <strong className="neg">{formatPaise(totals.owe)}</strong>
-          </span>
-        </div>
-      </section>
-
-      <div className="home__actions">
-        <button className="action-card" onClick={() => setCreating(true)}>
-          <span className="action-card__icon">
-            <IconPlus size={18} />
-          </span>
-          <span>
-            <strong>New group</strong>
-            <em>Start a trip, flat or dinner</em>
-          </span>
-        </button>
-        <button className="action-card" onClick={() => setJoining(true)}>
-          <span className="action-card__icon">
-            <IconShare size={18} />
-          </span>
-          <span>
-            <strong>Join group</strong>
-            <em>Use an invite code</em>
-          </span>
-        </button>
-        <button className="action-card" onClick={() => void loadVoiceRecognition()}>
-          <span className="action-card__icon">
-            <Mic size={18} />
-          </span>
-          <span>
-            <strong>Voice trip</strong>
-            <em>Describe your trip and expenses</em>
-          </span>
-        </button>
       </div>
 
-      <div className="section-head">
-        <h2>Your groups</h2>
-        {openQuestions > 0 && <span className="pill pill--warn">{openQuestions} open question{openQuestions === 1 ? '' : 's'}</span>}
-      </div>
-
-      {summaries.length === 0 ? (
-        <EmptyState
-          icon={<IconUsers size={26} />}
-          title="No groups yet"
-          body="Create a group and send the invite link to your people. Everyone joins with their name and UPI id, and every expense shows up on all phones."
-          action={
-            <div className="empty__actions">
-              <button className="btn btn--primary" onClick={() => setCreating(true)}>
-                <IconPlus size={18} /> Create a group
-              </button>
-              <button className="btn btn--ghost" onClick={() => setJoining(true)}>
-                I have a code
-              </button>
-            </div>
-          }
-        />
-      ) : (
-        <ul className="group-list">
-          {summaries.map((g) => (
-            <li key={g.groupId}>
-              <GroupCard summary={g} onOpen={() => onOpenGroup(g.groupId)} />
-            </li>
-          ))}
-        </ul>
+      {voiceCommand && (
+        <div className={`voice-feedback ${voiceBusy ? ' voice-feedback--busy' : ''}`} role="status" aria-live="polite">
+          {voiceBusy ? (
+            <>
+              <span className="voice-feedback__dot" />
+              Listening…
+            </>
+          ) : (
+            <>
+              <span className="voice-feedback__dot" />
+              <span className="voice-feedback__transcript">“{voiceTranscript}”</span>
+            </>
+          )}
+          <button className="voice-feedback__close" onClick={() => setVoiceCommand('')} aria-label="Dismiss">
+            ×
+          </button>
+        </div>
       )}
 
-      <footer className="home__footer">
-        <p className="save-note">
-          <span className="dot dot--ok" />
-          Shared ledger · updates live across everyone’s phones
-        </p>
-        <a
-          className="govira-link"
-          href="https://govira.tech"
-          target="_blank"
-          rel="noreferrer noopener"
-        >
-          Powered by Govira Technologies ↗
-        </a>
-      </footer>
+      {pendingVoiceAction && (
+        <div className="voice-confirm" role="alertdialog" aria-modal="true">
+          <div className="voice-confirm__backdrop" onClick={pendingVoiceAction.cancel} />
+          <div className="voice-confirm__card">
+            <h3>Confirm action</h3>
+            <p>{pendingVoiceAction.action}</p>
+            <div className="voice-confirm__actions">
+              <button className="btn btn--primary" onClick={pendingVoiceAction.confirm}>
+                Confirm
+              </button>
+              <button className="btn btn--ghost" onClick={pendingVoiceAction.cancel}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}        {!identity ? (
+        <section className="hero">
+          <div className="hero__text">
+            <h1>Split bills without the spreadsheet.</h1>
+            <p>
+              Track who paid for what, see who owes what, and settle up in the fewest possible transfers.
+              Everything you add is explained in plain language — and you can do it all by voice.
+            </p>
+            <div className="hero__row">
+              <button className="btn btn--primary btn--lg" onClick={() => setEditingIdentity(true)}>
+                Add your name to get started
+              </button>
+              <a className="btn btn--ghost btn--lg" href="https://govira.tech" target="_blank" rel="noopener noreferrer">
+                Powered by Govira Technologies
+              </a>
+            </div>
+            <p className="tiny-muted">No bank account, no UPI access, no money ever touches this app.</p>
+          </div>
+          <div className="hero__art" aria-hidden>
+            <svg viewBox="0 0 240 160" className="hero__illustration">
+              <rect x="20" y="40" width="82" height="100" rx="6" fill="var(--color-surface)" stroke="var(--color-line)" />
+              <rect x="30" y="52" width="62" height="8" rx="2" fill="var(--color-muted)" />
+              <rect x="30" y="66" width="48" height="6" rx="2" fill="var(--color-muted)" />
+              <rect x="30" y="78" width="56" height="6" rx="2" fill="var(--color-muted)" />
+              <rect x="30" y="90" width="30" height="6" rx="2" fill="var(--color-muted)" />
+              <rect x="138" y="40" width="82" height="100" rx="6" fill="var(--color-surface)" stroke="var(--color-line)" />
+              <rect x="148" y="52" width="62" height="8" rx="2" fill="var(--color-muted)" />
+              <rect x="148" y="66" width="48" height="6" rx="2" fill="var(--color-muted)" />
+              <rect x="148" y="78" width="56" height="6" rx="2" fill="var(--color-muted)" />
+              <rect x="148" y="90" width="30" height="6" rx="2" fill="var(--color-muted)" />
+              <circle cx="60" cy="128" r="10" fill="var(--color-surface)" stroke="var(--color-line)" />
+              <circle cx="180" cy="128" r="10" fill="var(--color-surface)" stroke="var(--color-line)" />
+              <path d="M68 128 H172" stroke="var(--color-line)" strokeLinecap="round" />
+            </svg>
+          </div>
+        </section>
+      ) : summaries.length === 0 ? (
+        <section className="home__empty">
+          <AvatarStack members={[]} size={64} />
+          <h2>No groups yet</h2>
+          <p>
+            Create one from the voice button above, or tap the button below and share the invite link so others can
+            join.
+          </p>
+          <div className="home__empty-actions">
+            <button className="btn btn--primary btn--block" onClick={startVoice}>
+              <IconMic size={18} />
+              Start a group with your voice
+            </button>
+            <button className="btn btn--ghost btn--block" onClick={() => setCreating(true)}>
+              <IconPlus size={18} />
+              Create a group manually
+            </button>
+          </div>
+          <p className="tiny-muted">A group is one trip, one dinner, one house — any shared set of expenses.</p>
+        </section>
+      ) : (
+        <section className="groups">
+          <div className="groups__head">
+            <h2>Your groups</h2>
+            <div className="groups__actions">
+              <button className="btn btn--ghost" onClick={startVoice}>
+                <IconMic size={16} />
+                Voice command
+              </button>
+              <button className="btn btn--ghost" onClick={() => setCreating(true)}>
+                <IconPlus size={16} />
+                New group
+              </button>
+            </div>
+          </div>
 
-      <CreateGroupSheet
-        open={creating}
-        onClose={() => setCreating(false)}
-        onCreate={async (name, emoji) => {
-          const id = await createGroup(name, emoji)
-          setCreating(false)
-          onOpenGroup(id)
-        }}
-      />
+          <ul className="groups__list">
+            {summaries.map((s) => (
+              <li key={s.groupId} className="group-card">
+                <button className="group-card__inner" onClick={() => onOpenGroup(s.groupId)}>                    <AvatarStack
+                    members={s.members}
+                    size={44}
+                    max={4}
+                    overflow={s.memberCount - 4}
+                  />
+                  <div className="group-card__info">
+                    <div className="group-card__title">
+                      <span className="group-card__emoji" aria-hidden>{s.emoji}</span>
+                      <div>
+                        <span className="group-card__name">{s.name}</span>
+                        <span className="group-card__meta">
+                          {s.memberCount} {s.memberCount === 1 ? 'person' : 'people'}
+                          {s.hasOpenQuestion ? ' · question open' : ''}
+                          {s.hasPendingPayment ? ' · payment pending' : ''}
+                        </span>
+                      </div>
+                    </div>
+                    {s.code && (
+                      <span className="group-card__code">
+                        <IconShare size={12} />
+                        Code: <code>{s.code}</code>
+                      </span>
+                    )}
+                  </div>
+                  <div className="group-card__right">
+                    {typeof s.netPaise === 'number' && s.netPaise !== 0 && (
+                      <div className={`group-card__net ${s.netPaise > 0 ? 'group-card__net--positive' : 'group-card__net--negative'}`}>
+                        <span className="group-card__net-label">
+                          {s.netPaise > 0 ? 'You get' : 'You owe'}
+                        </span>
+                        <span className="group-card__net-amount">{formatPaise(s.netPaise)}</span>
+                      </div>
+                    )}
+                    <span className="group-card__chevron" aria-hidden>
+                      <IconArrowRight size={18} />
+                    </span>
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
 
-      <JoinGroupSheet
-        open={joining}
-        onClose={() => setJoining(false)}
-        onJoin={async (code) => {
-          const id = await joinGroup(code)
-          setJoining(false)
-          onOpenGroup(id)
-        }}
-      />
+          <div className="groups__footer">
+            <p className="tiny-muted">
+              {totals.groups} {totals.groups === 1 ? 'group' : 'groups'} · {totals.members} {totals.members === 1 ? 'person' : 'people'}
+              {totals.owed ? ` · you're owed ${formatPaise(totals.owed)}` : ''}
+              {totals.owedBy ? ` · you owe ${formatPaise(totals.owedBy)}` : ''}
+              {totals.pending ? ` · ${totals.pending} pending` : ''}
+            </p>
+          </div>
+        </section>
+      )}
 
-      <IdentitySheet
-        open={editingIdentity}
-        onClose={() => setEditingIdentity(false)}
-        initialName={identity?.name ?? ''}
-        initialUpi={identity?.upiId ?? ''}
-        phone={identity?.phone ?? ''}
-        onSave={async (name, upiId) => {
-          await updateIdentity(name, upiId)
-          setEditingIdentity(false)
-        }}
-        onSignOut={async () => {
-          await signOut()
-          setEditingIdentity(false)
-        }}
-      />
+      {creating && (
+        <CreateGroupSheet
+          open
+          onClose={() => setCreating(false)}
+          onCreated={(id) => {
+            setCreating(false)
+            onOpenGroup(id)
+          }}
+        />
+      )}
+
+      {joining && (
+        <JoinGroupSheet
+          open
+          onClose={() => setJoining(false)}
+          onJoined={(id) => {
+            setJoining(false)
+            onOpenGroup(id)
+          }}
+        />
+      )}
+
+      {editingIdentity && (
+        <IdentitySheet
+          open
+          name={identity.name}
+          upiId={identity.upiId}
+          onClose={() => setEditingIdentity(false)}
+          onSave={updateIdentity}
+          onSignOut={() => {
+            setEditingIdentity(false)
+            signOut()
+          }}
+        />
+      )}
     </div>
-  )
-}
-
-function GroupCard({ summary, onOpen }: { summary: GroupSummary; onOpen: () => void }) {
-  const net = summary.netPaise
-  return (
-    <button className="group-card" onClick={onOpen}>
-      <span className="group-card__emoji" aria-hidden>
-        {summary.emoji}
-      </span>
-      <span className="group-card__main">
-        <span className="group-card__name">
-          {summary.name}
-          {summary.status === 'closed' && <span className="pill pill--muted">Closed</span>}
-          {summary.status === 'reconciling' && <span className="pill pill--warn">Reconciling</span>}
-          {summary.hasOpenQuestion && <span className="pill pill--bad">Question</span>}
-        </span>
-        <span className="group-card__meta">
-          <AvatarStack
-            members={summary.members.map((m) => ({ name: m.name, color: m.color % AVATAR_COLORS }))}
-            max={3}
-          />
-          <span>
-            {summary.memberCount} {summary.memberCount === 1 ? 'member' : 'members'}
-            {summary.hasPendingPayment && !summary.hasOpenQuestion ? ' · payment pending' : ''}
-          </span>
-        </span>
-      </span>
-      <span className="group-card__net">
-        <em>{net === null ? 'not synced' : net > 0 ? 'gets back' : net < 0 ? 'you owe' : 'settled'}</em>
-        <strong className={net && net > 0 ? 'pos' : net && net < 0 ? 'neg' : 'muted'}>
-          {net === null || net === 0 ? '—' : formatPaise(Math.abs(net))}
-        </strong>
-        <IconArrowRight size={16} className="group-card__chev" />
-      </span>
-    </button>
   )
 }
 
 function CreateGroupSheet({
   open,
   onClose,
-  onCreate,
+  onCreated,
 }: {
   open: boolean
   onClose: () => void
-  onCreate: (name: string, emoji: string) => Promise<void>
+  onCreated: (id: string) => void
 }) {
   const [name, setName] = useState('')
-  const [emoji, setEmoji] = useState('🏖️')
+  const [emoji, setEmoji] = useState(EMOJI_CHOICES[0])
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
+  const { createGroup, identity } = useStore()
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault()
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!identity) return setError('Add your name first.')
     if (!name.trim()) return setError('Give the group a name.')
+    setBusy(true)
     setError('')
-    setSaving(true)
     try {
-      await onCreate(name.trim(), emoji)
-      setName('')
-      setEmoji('🏖️')
+      const id = await createGroup(name.trim(), emoji)
+      onCreated(id)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not create the group.')
     } finally {
-      setSaving(false)
+      setBusy(false)
     }
   }
 
   return (
-    <Sheet
-      open={open}
-      onClose={() => {
-        onClose()
-        setError('')
-      }}
-      title="New group"
-      subtitle="You’ll get an invite link to send to the others."
-    >
-      <form onSubmit={submit} className="form">
+    <Sheet open={open} onClose={onClose} title="Create a group" subtitle="One group per trip, dinner, house, or project.">
+      <form className="form" onSubmit={submit}>
         <label className="field">
           <span>Group name</span>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Goa long weekend"
+            placeholder="Mumbai weekend, Rohan’s birthday, House expenses…"
             autoFocus
-            maxLength={60}
           />
         </label>
 
-        <div className="field">
-          <span>Icon</span>
-          <div className="emoji-grid">
-            {EMOJI_CHOICES.map((choice) => (
+        <label className="field">
+          <span>Emoji</span>
+          <div className="chip-row">
+            {EMOJI_CHOICES.map((e) => (
               <button
-                key={choice}
+                key={e}
                 type="button"
-                className={`emoji-choice${emoji === choice ? ' is-active' : ''}`}
-                onClick={() => setEmoji(choice)}
-                aria-label={`Choose ${choice}`}
+                className={`chip${emoji === e ? ' is-active' : ''}`}
+                onClick={() => setEmoji(e)}
               >
-                {choice}
+                {e}
               </button>
             ))}
           </div>
-        </div>
+        </label>
 
         {error && <p className="form-error">{error}</p>}
 
-        <button className="btn btn--primary btn--block" type="submit" disabled={saving}>
-          {saving ? 'Creating…' : 'Create group'}
+        <button className="btn btn--primary btn--block" type="submit" disabled={busy}>
+          {busy ? 'Creating…' : 'Create group'}
         </button>
       </form>
     </Sheet>
@@ -377,63 +561,52 @@ function CreateGroupSheet({
 function JoinGroupSheet({
   open,
   onClose,
-  onJoin,
+  onJoined,
 }: {
   open: boolean
   onClose: () => void
-  onJoin: (code: string) => Promise<void>
+  onJoined: (id: string) => void
 }) {
   const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
+  const { joinGroup, identity } = useStore()
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault()
-    const clean = code.trim().toUpperCase()
-    if (clean.length < 4) return setError('Invite codes are six characters, like 7KQ4M2.')
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!identity) return setError('Add your name first.')
+    if (!code.trim()) return setError('Paste the invite code.')
+    setBusy(true)
     setError('')
-    setSaving(true)
     try {
-      await onJoin(clean)
-      setCode('')
+      const id = await joinGroup(code.trim().toUpperCase())
+      onJoined(id)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not join that group.')
     } finally {
-      setSaving(false)
+      setBusy(false)
     }
   }
 
   return (
-    <Sheet
-      open={open}
-      onClose={() => {
-        onClose()
-        setError('')
-      }}
-      title="Join a group"
-      subtitle="Paste the code a friend sent you."
-    >
-      <form onSubmit={submit} className="form">
+    <Sheet open={open} onClose={onClose} title="Join a group" subtitle="Enter the invite code you were given.">
+      <form className="form" onSubmit={submit}>
         <label className="field">
           <span>Invite code</span>
           <input
             value={code}
             onChange={(e) => setCode(e.target.value.toUpperCase())}
-            placeholder="7KQ4M2"
-            className="code-input"
+            placeholder="e.g. AB73K9"
             autoFocus
-            autoCapitalize="characters"
-            spellCheck={false}
-            maxLength={12}
+            className="code-input"
           />
         </label>
 
         {error && <p className="form-error">{error}</p>}
 
-        <button className="btn btn--primary btn--block" type="submit" disabled={saving}>
-          {saving ? 'Joining…' : 'Join group'}
+        <button className="btn btn--primary btn--block" type="submit" disabled={busy}>
+          {busy ? 'Joining…' : 'Join group'}
         </button>
-        <p className="hint">Or just open the invite link — it fills this in for you.</p>
       </form>
     </Sheet>
   )
@@ -441,84 +614,75 @@ function JoinGroupSheet({
 
 function IdentitySheet({
   open,
+  name,
+  upiId,
   onClose,
-  initialName,
-  initialUpi,
-  phone,
   onSave,
   onSignOut,
 }: {
   open: boolean
+  name: string
+  upiId: string
   onClose: () => void
-  initialName: string
-  initialUpi: string
-  phone: string
   onSave: (name: string, upiId: string) => Promise<void>
-  onSignOut: () => Promise<void>
+  onSignOut: () => void
 }) {
-  const [name, setName] = useState(initialName)
-  const [upiId, setUpi] = useState(initialUpi)
+  const [editedName, setEditedName] = useState(name)
+  const [editedUpi, setEditedUpi] = useState(upiId)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [signature, setSignature] = useState(`${open}-${initialName}-${initialUpi}`)
+  const validUpi = isValidUpi(editedUpi)
 
-  if (signature !== `${open}-${initialName}-${initialUpi}`) {
-    setSignature(`${open}-${initialName}-${initialUpi}`)
-    setName(initialName)
-    setUpi(initialUpi)
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editedName.trim()) return setError('Your name is required.')
+    setBusy(true)
     setError('')
-  }
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!name.trim()) return setError('Your name is how friends see you.')
-    if (upiId.trim() && !isValidUpi(upiId)) return setError('That UPI id does not look right.')
-    setError('')
-    setSaving(true)
     try {
-      await onSave(name.trim(), upiId.trim())
-    } catch {
-      setError('Could not save your details.')
+      await onSave(editedName.trim(), editedUpi.trim())
+      onClose()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save.')
     } finally {
-      setSaving(false)
+      setBusy(false)
     }
   }
 
   return (
-    <Sheet open={open} onClose={onClose} title="Your details" subtitle="Friends see this in every group you’re in.">
-      <form className="form" onSubmit={submit}>
+    <Sheet open={open} onClose={onClose} title="Your profile" subtitle="This is how others see you in groups.">
+      <form className="form" onSubmit={save}>
         <label className="field">
-          <span>Name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} />
+          <span>Your name</span>
+          <input value={editedName} onChange={(e) => setEditedName(e.target.value)} autoFocus />
         </label>
+
         <label className="field">
-          <span>UPI id</span>
+          <span>
+            UPI ID
+            <span className="field__hint">
+              {validUpi
+                ? ' Looks right — others will see this as a payment button.'
+                : ' Optional. Must look like name@bank.'}
+            </span>
+          </span>
           <input
-            value={upiId}
-            onChange={(e) => setUpi(e.target.value)}
-            placeholder="name@okhdfcbank"
-            autoCapitalize="none"
-            spellCheck={false}
-            maxLength={100}
+            value={editedUpi}
+            onChange={(e) => setEditedUpi(e.target.value.toLowerCase())}
+            placeholder="yourname@okhdfc"
           />
-          <small>Others use this to pay you from the settle screen.</small>
         </label>
 
         {error && <p className="form-error">{error}</p>}
 
-        <button className="btn btn--primary btn--block" type="submit" disabled={saving}>
-          {saving ? 'Saving…' : 'Save'}
-        </button>
-      </form>
-
-      {phone && (
-        <div className="identity-account">
-          <p className="hint">Signed in with +91 {phone}. Your groups follow this number.</p>
-          <button className="btn btn--ghost btn--block" type="button" onClick={() => void onSignOut()}>
-            Sign out of this number
+        <div className="form__row">
+          <button className="btn btn--primary" type="submit" disabled={busy}>
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+          <button className="btn btn--ghost" type="button" onClick={onSignOut}>
+            Sign out
           </button>
         </div>
-      )}
+      </form>
     </Sheet>
   )
 }
