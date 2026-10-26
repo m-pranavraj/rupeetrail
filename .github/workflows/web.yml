@@ -24,7 +24,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # jsdom's current undici dependency requires Node 22; keep CI aligned
+          # with the engine range in the lockfile instead of masking test errors.
+          node-version: 22.22.2
           cache: npm
           cache-dependency-path: package-lock.json
 
