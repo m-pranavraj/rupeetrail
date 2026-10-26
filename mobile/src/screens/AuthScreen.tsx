@@ -1,18 +1,17 @@
 import React, { useEffect, useState } from 'react'
-import { KeyboardAvoidingView, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
+import {
+  KeyboardAvoidingView,
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
-import {
-  Banner,
-  Button,
-  FadeIn,
-  Field,
-  Muted,
-  PressableScale,
-  Screen,
-  Subtitle,
-  tap,
-} from '../components/ui'
+import { Banner, Button, FadeIn, Field, Muted, PressableScale, tap } from '../components/ui'
 import { useStore } from '../state'
 import { colors, gradients, radius, spacing } from '../theme'
 
@@ -29,14 +28,8 @@ export function AuthScreen() {
   const [localError, setLocalError] = useState('')
 
   useEffect(() => {
-    const subscription = Keyboard.addListener('keyboardWillShow', ({ endCoordinates }) => {
-      const scrollView = screenRef.current
-      if (scrollView) {
-        scrollView.scrollTo({ y: endCoordinates.height })
-      }
-    })
-    return () => subscription.remove()
-  }, [])
+    clearMessages()
+  }, [clearMessages])
 
   const switchMode = (next: Mode) => {
     if (next === mode) return
@@ -70,123 +63,136 @@ export function AuthScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior="padding"
-      keyboardShouldPersistTaps="handled"
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <FadeIn>
-        <View style={styles.markRow}>
-          <LinearGradient colors={gradients.primary} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.mark}>
-            <Text style={styles.markText}>₹</Text>
-          </LinearGradient>
-          <View style={{ marginLeft: spacing(3) }}>
-            <Text style={styles.brand}>RupeeSplit</Text>
-            <Text style={styles.brandSub}>by Govira Technologies</Text>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        showsVerticalScrollIndicator={false}
+      >
+        <FadeIn>
+          <View style={styles.markRow}>
+            <LinearGradient
+              colors={gradients.primary}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.mark}
+            >
+              <Text style={styles.markText}>₹</Text>
+            </LinearGradient>
+            <View style={styles.brandBlock}>
+              <Text style={styles.brand}>RupeeSplit</Text>
+              <Text style={styles.brandSub}>by Govira Technologies</Text>
+            </View>
           </View>
-        </View>
-      </FadeIn>
+        </FadeIn>
 
-      <FadeIn delay={100}>
-        <View style={styles.tabs}>
-          {(
-            [
-              { id: 'signup', label: 'New account' },
-              { id: 'signin', label: 'Sign in' },
-            ] as { id: Mode; label: string }[]
-          ).map((tab) => {
-            const active = mode === tab.id
-            return (
-              <Pressable key={tab.id} onPress={() => switchMode(tab.id)} style={styles.tab}>
-                {active ? (
-                  <LinearGradient
-                    colors={gradients.primary}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={StyleSheet.absoluteFill}
-                  />
-                ) : null}
-                <Text style={[styles.tabText, active && { color: colors.accentInk }]}>{tab.label}</Text>
-              </Pressable>
-            )
-          })}
-        </View>
-      </FadeIn>
+        <FadeIn delay={100}>
+          <View style={styles.tabs}>
+            {(
+              [
+                { id: 'signup', label: 'New account' },
+                { id: 'signin', label: 'Sign in' },
+              ] as { id: Mode; label: string }[]
+            ).map((tab) => {
+              const active = mode === tab.id
+              return (
+                <Pressable key={tab.id} onPress={() => switchMode(tab.id)} style={styles.tab}>
+                  {active ? (
+                    <LinearGradient
+                      colors={gradients.primary}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={StyleSheet.absoluteFill}
+                    />
+                  ) : null}
+                  <Text style={[styles.tabText, active ? styles.tabTextActive : null]}>
+                    {tab.label}
+                  </Text>
+                </Pressable>
+              )
+            })}
+          </View>
+        </FadeIn>
 
-      {mode === 'signup' ? (
+        {mode === 'signup' ? (
+          <Field
+            label="Your name"
+            value={name}
+            onChangeText={setName}
+            placeholder="Arjun"
+            autoCapitalize="words"
+            maxLength={40}
+          />
+        ) : null}
+
         <Field
-          label="Your name"
-          value={name}
-          onChangeText={setName}
-          placeholder="Arjun"
-          autoCapitalize="words"
-          maxLength={40}
+          label="Mobile number"
+          value={phone}
+          onChangeText={setPhone}
+          placeholder="9876543210"
+          keyboardType="number-pad"
+          maxLength={10}
+          hint="This number is your account. Only one account can use it."
         />
-      ) : null}
 
-      <Field
-        label="Mobile number"
-        value={phone}
-        onChangeText={setPhone}
-        placeholder="9876543210"
-        keyboardType="number-pad"
-        maxLength={10}
-        hint="This number is your account. Only one account can use it."
-      />
-
-      <Field
-        label="PIN"
-        value={pin}
-        onChangeText={setPin}
-        placeholder="4–6 digits"
-        keyboardType="number-pad"
-        secureTextEntry={!reveal}
-        maxLength={6}
-        hint="Anyone with your number and PIN can open these ledgers."
-        right={
-          <Pressable onPress={() => setReveal((value) => !value)} hitSlop={10}>
-            <Ionicons
-              name={reveal ? 'eye-off-outline' : 'eye-outline'}
-              size={18}
-              color={colors.muted}
-            />
-          </Pressable>
-        }
-      />
-
-      {mode === 'signup' ? (
         <Field
-          label="UPI id (optional)"
-          value={upiId}
-          onChangeText={setUpi}
-          placeholder="name@okhdfcbank"
-          autoCapitalize="none"
-          autoCorrect={false}
-          maxLength={100}
-          hint="So people can actually pay you from the settle screen."
+          label="PIN"
+          value={pin}
+          onChangeText={setPin}
+          placeholder="4–6 digits"
+          keyboardType="number-pad"
+          secureTextEntry={!reveal}
+          maxLength={6}
+          hint="Anyone with your number and PIN can open these ledgers."
+          right={
+            <Pressable onPress={() => setReveal((value) => !value)} hitSlop={10}>
+              <Ionicons
+                name={reveal ? 'eye-off-outline' : 'eye-outline'}
+                size={18}
+                color={colors.muted}
+              />
+            </Pressable>
+          }
         />
-      ) : null}
 
-      {localError || error ? <Banner tone="error">{localError || error}</Banner> : null}
+        {mode === 'signup' ? (
+          <Field
+            label="UPI id (optional)"
+            value={upiId}
+            onChangeText={setUpi}
+            placeholder="name@okhdfcbank"
+            autoCapitalize="none"
+            autoCorrect={false}
+            maxLength={100}
+            hint="So people can actually pay you from the settle screen."
+          />
+        ) : null}
 
-      <Button
-        label={mode === 'signup' ? 'Create my account' : 'Sign in'}
-        onPress={() => void submit()}
-        loading={busy}
-      />
+        {localError || error ? <Banner tone="error">{localError || error}</Banner> : null}
 
-      <Muted small>
-        {mode === 'signup'
-          ? 'Already have one? Tap Sign in above — your trips come back automatically.'
-          : 'New here? Create an account with just your number and a PIN.'}
-      </Muted>
+        <Button
+          label={mode === 'signup' ? 'Create my account' : 'Sign in'}
+          onPress={() => void submit()}
+          loading={busy}
+        />
 
-      <PressableScale onPress={() => void Linking.openURL('https://govira.tech')}>
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            Powered by Govira Technologies <Text style={{ color: colors.accent }}>↗</Text>
-          </Text>
-        </View>
-      </PressableScale>
+        <Muted small>
+          {mode === 'signup'
+            ? 'Already have one? Tap Sign in above — your trips come back automatically.'
+            : 'New here? Create an account with just your number and a PIN.'}
+        </Muted>
+
+        <PressableScale onPress={() => void Linking.openURL('https://govira.tech')}>
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>
+              Powered by Govira Technologies <Text style={styles.footerArrow}>↗</Text>
+            </Text>
+          </View>
+        </PressableScale>
+      </ScrollView>
     </KeyboardAvoidingView>
   )
 }
@@ -194,49 +200,82 @@ export function AuthScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: colors.bg,
+  },
+  scrollContent: {
+    paddingBottom: spacing(10),
   },
   markRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing(4),
-    paddingTop: spacing(8),
+    paddingTop: spacing(10),
   },
   mark: {
-    fontSize: 48,
-    color: colors.accent,
+    width: 56,
+    height: 56,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   markText: {
-    fontSize: 48,
-    color: '#fff',
-    marginRight: spacing(1),
+    fontSize: 30,
+    fontWeight: '800',
+    color: colors.accentInk,
   },
-  headline: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: colors.onBackground,
-    textAlign: 'center',
-    paddingHorizontal: spacing(4),
-    paddingTop: spacing(8),
+  brandBlock: {
+    marginLeft: spacing(3),
+  },
+  brand: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colors.text,
+    letterSpacing: -0.4,
+  },
+  brandSub: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.muted,
+    marginTop: 2,
   },
   tabs: {
     flexDirection: 'row',
-    justifyContent: 'center',
+    alignSelf: 'flex-start',
     marginHorizontal: spacing(4),
-    marginTop: spacing(4),
+    marginTop: spacing(6),
+    marginBottom: spacing(2),
+    padding: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderSoft,
   },
   tab: {
-    paddingHorizontal: spacing(2),
-    paddingVertical: spacing(1),
+    paddingHorizontal: spacing(4),
+    paddingVertical: spacing(2),
     borderRadius: radius.pill,
-    marginHorizontal: spacing(1),
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tabText: {
-    fontSize: 14,
+    fontSize: 13,
+    fontWeight: '700',
     color: colors.muted,
+  },
+  tabTextActive: {
+    color: colors.accentInk,
   },
   footer: {
     alignItems: 'center',
     marginTop: spacing(8),
   },
-  footerText: { color: colors.muted, fontSize: 11.5, fontWeight: '600' },
-})
+  footerText: {
+    color: colors.muted,
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
+  footerArrow: {
+    color: colors.accent,
+  },
+})

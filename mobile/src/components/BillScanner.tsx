@@ -9,7 +9,7 @@ import { parseReceipt, type ParsedReceipt } from '../lib/receipt'
 import { buildExpenseFromReceipt, buildExpenseFromVoice } from '../lib/billParser'
 import { parseVoiceSplit, type ParsedVoice } from '../lib/voice'
 import type { Expense } from '../lib/types'
-import { prepareImageForOcr } from '../lib/image-prep'
+import TextRecognition from '@react-native-ml-kit/text-recognition'
 
 type Mode = 'choose' | 'receipt' | 'quick'
 
@@ -45,39 +45,27 @@ export function BillScanner({
 
   const memberIds = useMemo(() => new Set(members.map((member) => member.id)), [members])
 
-  const readImage = useCallback(
-    async (uri: string) => {
-      setBusy(true)
-      setError('')
-      setStatus('Reading the bill…')
-      try {
-        // Fetch the image and preprocess it for better OCR results
-        const response = await fetch(uri)
-        const blob = await response.blob()
-        const processedBlob = await prepareImageForOcr(blob)
-        const text = await new Promise<string>((resolve) => {
-          const reader = new FileReader()
-          reader.onload = () => resolve(reader.result?.toString() ?? '')
-          reader.readAsText(processedBlob)
-        })
-        if (!text.trim()) {
-          setError('No text was found in that photo. Try again in better light.')
-          return
-        }
-        const parsed = parseReceipt(text)
-        setReceipt(parsed)
-        setMode('receipt')
-      } catch (cause) {
-        setError(
-          'Could not read that photo. Try again, or type the amount.',
-        )
-      } finally {
-        setBusy(false)
-        setStatus('')
+  const readImage = useCallback(async (uri: string) => {
+    setBusy(true)
+    setError('')
+    setStatus('Reading the bill…')
+    try {
+      // ML Kit reads the photo on the device — nothing leaves the phone.
+      const result = await TextRecognition.recognize(uri)
+      const text = result.text ?? ''
+      if (!text.trim()) {
+        setError('No text was found in that photo. Try again in better light.')
+        return
       }
-    },
-    [],
-  )
+      setReceipt(parseReceipt(text))
+      setMode('receipt')
+    } catch {
+      setError('Could not read that photo. Try again, or type the amount.')
+    } finally {
+      setBusy(false)
+      setStatus('')
+    }
+  }, [])
 
   const capture = useCallback(
     async (fromCamera: boolean) => {

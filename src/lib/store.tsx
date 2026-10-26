@@ -53,6 +53,7 @@ import {
 import {
   loadIdentity,
   loadMemberships,
+  newIdentityId,
   readCache,
   removeMembership,
   saveIdentity,
@@ -462,7 +463,11 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const start = useCallback((name: string, upiId: string) => {
-    const next = { name: name.trim(), upiId: upiId.trim() }
+    const next: Identity = {
+      id: identityRef.current?.id ?? newIdentityId(),
+      name: name.trim(),
+      upiId: upiId.trim(),
+    }
     saveIdentity(next)
     // Update the ref immediately: an invite link joins in the same handler that
     // saves the identity, before React has re-rendered.
@@ -471,7 +476,11 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const updateIdentity = useCallback(async (name: string, upiId: string) => {
-    const next = { name: name.trim(), upiId: upiId.trim() }
+    const next: Identity = {
+      id: identityRef.current?.id ?? newIdentityId(),
+      name: name.trim(),
+      upiId: upiId.trim(),
+    }
     saveIdentity(next)
     identityRef.current = next
     setIdentity(next)
@@ -490,6 +499,7 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
 
   const applyAuth = useCallback((session: AuthSession) => {
     const nextIdentity: Identity = {
+      id: identityRef.current?.id ?? newIdentityId(),
       name: session.user.name,
       upiId: session.user.upiId ?? '',
       phone: session.user.phone,

@@ -5,9 +5,7 @@
  * same app. Values are deliberately deep and low-contrast on backgrounds, with
  * a single vivid mint accent for money that is *yours* and coral for money you
  * owe — the two states that matter most in a shared ledger.
- */
-
-export const colors = {
+ */export const colors = {
   bg: '#07130f',
   bgElevated: '#0b1b15',
   surface: '#10241c',
@@ -30,14 +28,17 @@ export const colors = {
   warn: '#f4c96b',
   info: '#75b9ff',
   violet: '#b79bff',
-
-  positive: '#4fe3ac',
+  positive: '#4fe3ac',
   negative: '#ff8a72',
   white: '#ffffff',
   black: '#000000',
   overlay: 'rgba(3, 12, 9, 0.72)',
   glass: 'rgba(20, 48, 38, 0.72)',
+  onBackground: '#f1fbf6',
+  brand: '#07130f',
+  brandSub: '#8fb3a4',
 } as const
+
 
 /** Category colours used by the ledger and the trip map pins. */
 export const categoryColors: Record<string, string> = {

@@ -80,7 +80,18 @@ export function readPhoneHash(): string | null {
 
 // --- Identity ---
 
+/** Stable, device-local id for "me". Kept across profile edits and sign-ins so
+ * per-member references (payers, acks, disputes) never point at a dead id. */
+export function newIdentityId(): string {
+  const random =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10)
+  return `user-${random}`
+}
+
 export interface Identity {
+  id: string
   name: string
   upiId: string
   /** the account's mobile number, once signed in */
@@ -94,6 +105,7 @@ export function loadIdentity(): Identity | null {
   const identity = read<Identity>(IDENTITY_KEY)
   if (!identity || typeof identity.name !== 'string' || !identity.name.trim()) return null
   return {
+    id: typeof identity.id === 'string' && identity.id ? identity.id : newIdentityId(),
     name: identity.name.trim(),
     upiId: typeof identity.upiId === 'string' ? identity.upiId : '',
     ...(typeof identity.phone === 'string' && identity.phone ? { phone: identity.phone } : {}),

@@ -146,6 +146,7 @@ export const IconRefresh = (p: IconProps) => (
     <path d="M20 5v5h-5" />
   </svg>
 )
+
 export const IconMic = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3z" />
@@ -154,14 +155,15 @@ export const IconMic = (p: IconProps) => (
     <line x1="8" y1="23" x2="16" y2="23" />
   </svg>
 )
-// GravityId directly on the export so Icons.tsx ties the icon name to the asset id.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-(IconMic as any).default = 'ic802344172_mic_button';export const IconMapPin = (p: IconProps) => (
+
+export const IconMapPin = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M12 21s-7-6.3-7-11a7 7 0 0114 0c0 4.7-7 11-7 11z" />
     <circle cx="12" cy="10" r="2.5" />
   </svg>
-)export const IconMap = (p: IconProps) => (
+)
+
+export const IconMap = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M20 8l-4-4 4-4" />
     <path d="M4 12l4 4-4 4" />
@@ -169,4 +171,4 @@ export const IconMic = (p: IconProps) => (
     <path d="M8 4l4 4-4 4" />
     <circle cx="12" cy="12" r="2" />
   </svg>
-)
+)
