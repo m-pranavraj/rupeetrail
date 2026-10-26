@@ -8,6 +8,7 @@ import { formatPaise } from '../lib/money'
 import { parseReceipt, type ParsedReceipt } from '../lib/receipt'
 import { buildExpenseFromReceipt, buildExpenseFromVoice } from '../lib/billParser'
 import { parseVoiceSplit, type ParsedVoice } from '../lib/voice'
+import { useDictation } from '../lib/dictation'
 import type { Expense } from '../lib/types'
 import TextRecognition from '@react-native-ml-kit/text-recognition'
 
@@ -44,6 +45,21 @@ export function BillScanner({
   const [error, setError] = useState('')
 
   const memberIds = useMemo(() => new Set(members.map((member) => member.id)), [members])
+
+  // Dictating a bill lands in the same parser as typing it, so a spoken
+  // "dinner 1200, Priya 400, I paid" produces exactly the same draft.
+  const understand = useCallback(
+    (text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      setQuickText(trimmed)
+      setVoice(parseVoiceSplit(trimmed, members, meMemberId))
+      setMode('quick')
+    },
+    [meMemberId, members],
+  )
+
+  const dictation = useDictation({ onResult: understand })
 
   const readImage = useCallback(async (uri: string) => {
     setBusy(true)
@@ -103,11 +119,8 @@ export function BillScanner({
   }, [memberIds, meMemberId, onApply, receipt])
 
   const parseQuick = useCallback(() => {
-    if (!quickText.trim()) return
-    const parsed = parseVoiceSplit(quickText, members, meMemberId)
-    setVoice(parsed)
-    setMode('quick')
-  }, [meMemberId, members, quickText])
+    understand(quickText)
+  }, [quickText, understand])
 
   const useQuick = useCallback(() => {
     if (!voice) return
@@ -158,7 +171,7 @@ export function BillScanner({
           </Card>
 
           <Card>
-            <Label>Or just type it</Label>
+            <Label>Or say it / type it</Label>
             <TextInput
               value={quickText}
               onChangeText={setQuickText}
@@ -168,10 +181,46 @@ export function BillScanner({
               multiline
               style={styles.quickInput}
             />
+            {dictation.listening || dictation.busy ? (
+              <View style={styles.listeningRow}>
+                <View style={styles.liveDot} />
+                <Text style={styles.listeningText} numberOfLines={2}>
+                  {dictation.interim || 'Listening…'}
+                </Text>
+              </View>
+            ) : null}
             <Muted small>
               Say who paid and what each person had — names from this group are matched automatically.
             </Muted>
-            <Button label="Understand this" variant="soft" onPress={parseQuick} icon={<Ionicons name="sparkles-outline" size={16} color={colors.text} />} />
+            <View style={styles.actionRow}>
+              <PressableScale
+                style={{ flex: 1 }}
+                onPress={() => {
+                  tap()
+                  if (dictation.listening) dictation.stop()
+                  else void dictation.start()
+                }}
+                disabled={busy || dictation.busy}
+              >
+                <View style={[styles.source, dictation.listening && styles.sourceLive]}>
+                  <Ionicons
+                    name={dictation.listening ? 'stop-circle-outline' : 'mic-outline'}
+                    size={20}
+                    color={dictation.listening ? colors.accentInk : colors.text}
+                  />
+                  <Text style={[styles.sourceText, dictation.listening && { color: colors.accentInk }]}>
+                    {dictation.listening ? 'Stop' : 'Speak'}
+                  </Text>
+                </View>
+              </PressableScale>
+              <PressableScale style={{ flex: 1 }} onPress={parseQuick} disabled={!quickText.trim()}>
+                <View style={styles.source}>
+                  <Ionicons name="sparkles-outline" size={20} color={colors.text} />
+                  <Text style={styles.sourceText}>Understand</Text>
+                </View>
+              </PressableScale>
+            </View>
+            {dictation.error ? <Banner tone="error">{dictation.error}</Banner> : null}
           </Card>
 
           {error ? <Banner tone="error">{error}</Banner> : null}
@@ -326,6 +375,25 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   sourceText: { color: colors.text, fontSize: 13, fontWeight: '700' },
+  sourceLive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  actionRow: { flexDirection: 'row', gap: spacing(2.5), marginTop: spacing(3), alignSelf: 'stretch' },
+  listeningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing(2),
+    marginTop: spacing(2.5),
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radius.md,
+    paddingVertical: spacing(2),
+    paddingHorizontal: spacing(2.5),
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.accent,
+  },
+  listeningText: { color: colors.textSoft, fontSize: 13, flex: 1, fontStyle: 'italic' },
   quickInput: {
     marginTop: spacing(2),
     backgroundColor: colors.surface,
