@@ -22,6 +22,10 @@ interface BalanceInput {
  *       + (settlements they sent) - (settlements they received)
  *
  * A positive net means the group owes that member money.
+ *
+ * Settlements are counted even when one party is not in the group — we use a
+ * stable synthetic id (manual:from:<slug> / manual:to:<slug>) so the ledger
+ * still reflects money that actually moved.
  */
 export function computeBalances({ group, expenses, settlements }: BalanceInput): MemberBalance[] {
   const members = group.members
@@ -41,7 +45,6 @@ export function computeBalances({ group, expenses, settlements }: BalanceInput):
   const live = expenses.filter((e) => !e.deletedAt && e.amountPaise > 0)
 
   for (const expense of live) {
-    // Credits: money each payer put in.
     for (const payer of expense.payers) {
       const bal = byId.get(payer.memberId)
       if (!bal || payer.amountPaise === 0) continue
@@ -49,20 +52,17 @@ export function computeBalances({ group, expenses, settlements }: BalanceInput):
       bal.netPaise += payer.amountPaise
       bal.entries.push({
         kind: 'paid',
-        label: `Paid for “${expense.description}”`,
+        label: `Paid for "${expense.description}"`,
         amountPaise: payer.amountPaise,
         refId: expense.id,
         date: expense.date,
       })
     }
 
-    // Debits: each participant's allocated share.
     let allocations
     try {
       allocations = allocateSplit(expense.amountPaise, expense.split)
     } catch {
-      // A corrupt split must not silently disappear; skip debits for it so the
-      // reconciliation screen can surface the problem instead of lying.
       continue
     }
     for (const alloc of allocations) {
@@ -72,7 +72,7 @@ export function computeBalances({ group, expenses, settlements }: BalanceInput):
       bal.netPaise -= alloc.amountPaise
       bal.entries.push({
         kind: 'share',
-        label: `Your share of “${expense.description}”`,
+        label: `Your share of "${expense.description}"`,
         amountPaise: -alloc.amountPaise,
         refId: expense.id,
         date: expense.date,
@@ -83,9 +83,36 @@ export function computeBalances({ group, expenses, settlements }: BalanceInput):
   // Settlements only count once both sides (or a provider) attest.
   for (const s of settlements) {
     if (s.status !== 'confirmed') continue
-    const from = byId.get(s.from)
-    const to = byId.get(s.to)
-    if (!from || !to) continue
+
+    const syntheticFrom = s.from.startsWith('manual:')
+    const syntheticTo = s.to.startsWith('manual:')
+
+    if (!byId.has(s.from)) {
+      byId.set(s.from, {
+        memberId: s.from,
+        netPaise: 0,
+        entries: [],
+        paidPaise: 0,
+        sharePaise: 0,
+        settledInPaise: 0,
+        settledOutPaise: 0,
+      })
+    }
+    if (!byId.has(s.to)) {
+      byId.set(s.to, {
+        memberId: s.to,
+        netPaise: 0,
+        entries: [],
+        paidPaise: 0,
+        sharePaise: 0,
+        settledInPaise: 0,
+        settledOutPaise: 0,
+      })
+    }
+
+    const from = byId.get(s.from)!
+    const to = byId.get(s.to)!
+
     from.settledOutPaise += s.amountPaise
     from.netPaise += s.amountPaise
     from.entries.push({
@@ -95,6 +122,7 @@ export function computeBalances({ group, expenses, settlements }: BalanceInput):
       refId: s.id,
       date: s.updatedAt,
     })
+
     to.settledInPaise += s.amountPaise
     to.netPaise -= s.amountPaise
     to.entries.push({
@@ -106,10 +134,20 @@ export function computeBalances({ group, expenses, settlements }: BalanceInput):
     })
   }
 
+  // Build the result list: real members first, then any synthetic entries.
+  const realIds = new Set(members.map((m) => m.id))
+  const syntheticIds = [...byId.keys()].filter((id) => !realIds.has(id))
+
+  const finalMembers: MemberBalance[] = [
+    ...members.map((m) => byId.get(m.id)!).filter(Boolean),
+    ...syntheticIds.map((id) => byId.get(id)!).filter(Boolean),
+  ]
+
   for (const bal of byId.values()) {
     bal.entries.sort((a, b) => b.date - a.date)
   }
-  return members.map((m) => byId.get(m.id)!)
+
+  return finalMembers
 }
 
 /** Total of all nets must be zero — the core reconciliation invariant. */
@@ -118,6 +156,10 @@ export function isReconciled(balances: MemberBalance[]): boolean {
 }
 
 export function nameOf(group: Group, memberId: MemberId): string {
+  if (memberId.startsWith('manual:')) {
+    const parts = memberId.split(':')
+    return parts.length >= 3 ? parts[2].replace(/-/g, ' ') : 'Someone'
+  }
   return group.members.find((m) => m.id === memberId)?.name ?? 'Removed member'
 }
 
