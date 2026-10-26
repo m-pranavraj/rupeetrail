@@ -45,7 +45,9 @@ export function SettleTab({
   const name = (id: string) => {
     if (id.startsWith('manual:')) {
       const parts = id.split(':')
-      return parts.length >= 3 ? parts[2].replace(/-/g, ' ') : 'Someone'
+      return parts.length >= 3
+        ? parts[2].replace(/-/g, ' ')
+        : parts[1]?.replace(/-/g, ' ') || 'Someone'
     }
     return group.members.find((m) => m.id === id)?.name ?? 'Member'
   }

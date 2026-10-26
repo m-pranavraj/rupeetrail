@@ -230,6 +230,7 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   identityRef.current = identity
   const activeRef = useRef<GroupSnapshot | null>(active)
   activeRef.current = active
+  const refreshInFlight = useRef<Promise<void> | null>(null)
 
   const applySnapshot = useCallback((membership: Membership, incoming: GroupSnapshot) => {
     const snapshot = withPending(incoming, membership)
@@ -285,24 +286,24 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false
     const list = loadMemberships()
     if (list.length === 0) return
-    ;(async () => {
-      for (const membership of list) {
-        if (cancelled) return
-        try {
-          const snapshot = await fetchGroup(membership.groupId, credentialsOf(membership))
+      ; (async () => {
+        for (const membership of list) {
           if (cancelled) return
-          writeCache(snapshot)
-          setSummaries((prev) => {
-            const next = summaryFrom(membership, snapshot)
-            return prev.some((s) => s.groupId === next.groupId)
-              ? prev.map((s) => (s.groupId === next.groupId ? next : s))
-              : [...prev, next]
-          })
-        } catch {
-          // Keep the cached summary; the group screen reports the real error.
+          try {
+            const snapshot = await fetchGroup(membership.groupId, credentialsOf(membership))
+            if (cancelled) return
+            writeCache(snapshot)
+            setSummaries((prev) => {
+              const next = summaryFrom(membership, snapshot)
+              return prev.some((s) => s.groupId === next.groupId)
+                ? prev.map((s) => (s.groupId === next.groupId ? next : s))
+                : [...prev, next]
+            })
+          } catch {
+            // Keep the cached summary; the group screen reports the real error.
+          }
         }
-      }
-    })()
+      })()
     return () => {
       cancelled = true
     }
@@ -338,8 +339,16 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return refreshInFlight.current
     const membership = membershipsRef.current.find((m) => m.groupId === activeIdRef.current)
-    if (membership) await loadGroup(membership)
+    if (!membership) return
+    const request = loadGroup(membership).then(() => undefined)
+    refreshInFlight.current = request
+    try {
+      await request
+    } finally {
+      if (refreshInFlight.current === request) refreshInFlight.current = null
+    }
   }, [loadGroup])
 
   /**
@@ -371,17 +380,14 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!activeGroupId || live === 'live') return
-    const tick = () => {
-      if (document.visibilityState === 'visible') void refresh()
-    }
-    const timer = window.setInterval(tick, 5_000)
+    // Only refresh on visibility/focus events when the WebSocket is not live.
+    // This avoids hammering the server with periodic polls.
     const onVisible = () => {
       if (document.visibilityState === 'visible') void refresh()
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
     return () => {
-      window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
@@ -432,12 +438,8 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     void flushOutbox()
     const onOnline = () => void flushOutbox()
     window.addEventListener('online', onOnline)
-    const timer = window.setInterval(() => {
-      if (navigator.onLine !== false) void flushOutbox()
-    }, 30_000)
     return () => {
       window.removeEventListener('online', onOnline)
-      window.clearInterval(timer)
     }
   }, [flushOutbox])
 
@@ -455,7 +457,7 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
               ),
             )
           })
-          .catch(() => {})
+          .catch(() => { })
       }
     }
     window.addEventListener('focus', onFocus)
@@ -764,9 +766,23 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
       method: Settlement['method'],
       note?: string,
     ) =>
-      withGroup(groupId, (auth) =>
-        apiAddSettlement(groupId, auth, { from, to, amountPaise, method, note }),
-      ),
+      withGroup(groupId, async (auth) => {
+        const created = await apiAddSettlement(groupId, auth, { from, to, amountPaise, method, note })
+        const membership = membershipsRef.current.find((item) => item.groupId === groupId)
+        const action =
+          from.startsWith('manual:') && to === membership?.memberId
+            ? 'received'
+            : to.startsWith('manual:') && from === membership?.memberId
+              ? 'paid'
+              : null
+
+        if (!action) return created
+
+        // A manually named counterparty cannot confirm from another device.
+        // Confirm the side represented by this device immediately so the
+        // ledger and payment history agree without a second user action.
+        return apiConfirmSettlement(groupId, auth, created.settlementId, action)
+      }),
     [withGroup],
   )
 

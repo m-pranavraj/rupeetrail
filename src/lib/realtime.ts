@@ -33,6 +33,11 @@ function normaliseSocketUrl(raw: string): string {
   }
 }
 
+/** Exponential backoff: 600ms, 1.2s, 2.4s, 4.8s, 9.6s, 19.2s, 30s cap */
+function backoffMs(attempt: number): number {
+  return Math.min(30_000, 600 * 2 ** Math.min(attempt, 5))
+}
+
 export function connectGroup({
   groupId,
   credentials,
@@ -57,6 +62,7 @@ export function connectGroup({
     window.clearTimeout(renewalTimer)
     renewalTimer = undefined
     if (!connection) return
+    connection.onopen = null
     connection.onmessage = null
     connection.onclose = null
     connection.onerror = null
@@ -75,7 +81,7 @@ export function connectGroup({
     pending = controller
     try {
       const ticket = await realtimeTicket(credentials, `group:${groupId}`)
-      if (stopped) return
+      if (stopped || controller.signal.aborted) return
       const connection = new WebSocket(normaliseSocketUrl(ticket.websocketUrl))
       socket = connection
 
@@ -96,7 +102,9 @@ export function connectGroup({
         if (message.type === 'ready') {
           attempt = 0
           onStatus('live')
+          // Fetch the latest snapshot once connected.
           onLedger()
+          // Schedule renewal slightly before the ticket expires.
           const life = Math.max(5_000, Math.min(300_000, Number(message.expiresInMs) || 300_000))
           window.clearTimeout(renewalTimer)
           renewalTimer = window.setTimeout(
@@ -104,7 +112,7 @@ export function connectGroup({
               retire(connection)
               void open()
             },
-            Math.max(1_000, life - 1_000),
+            Math.max(1_000, life - 10_000), // renew 10s before expiry
           )
           return
         }
@@ -124,7 +132,7 @@ export function connectGroup({
         onStatus('offline')
         onPresence(0)
         attempt += 1
-        schedule(Math.min(20_000, 800 * 2 ** Math.min(attempt, 5)))
+        schedule(backoffMs(attempt))
       }
 
       connection.onclose = drop
@@ -134,10 +142,9 @@ export function connectGroup({
       const status = (error as { status?: number }).status
       onStatus('offline')
       onPresence(0)
-      // A missing realtime binding or a revoked membership will not fix itself
-      // quickly; keep trying slowly so the app still recovers after a redeploy.
       attempt += 1
-      schedule(status === 401 || status === 403 || status === 503 ? 30_000 : Math.min(20_000, 800 * 2 ** attempt))
+      // 503 means realtime is unavailable on this deployment — wait longer.
+      schedule(status === 503 ? 60_000 : backoffMs(attempt))
     } finally {
       if (pending === controller) pending = null
     }

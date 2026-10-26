@@ -65,6 +65,38 @@ describe('exact split', () => {
     ])
   })
 
+  describe('manual settlements', () => {
+    it('reduces the real member balance immediately when the counterparty is manual', () => {
+      const balances = computeBalances({
+        group: group(['me', 'other']),
+        expenses: [
+          expense({
+            amountPaise: 50000,
+            payers: [{ memberId: 'me', amountPaise: 50000 }],
+            split: { mode: 'equal', participants: ['other'] },
+          }),
+        ],
+        settlements: [
+          {
+            id: 's1',
+            groupId: 'g',
+            from: 'manual:from:rajesh',
+            to: 'me',
+            amountPaise: 50000,
+            method: 'cash',
+            status: 'receiver_confirmed',
+            createdAt: 1,
+            updatedAt: 1,
+            receiverConfirmedAt: 1,
+          },
+        ],
+      })
+
+      expect(balances.find((balance) => balance.memberId === 'me')?.netPaise).toBe(0)
+      expect(isReconciled(balances)).toBe(true)
+    })
+  })
+
   it('rejects shares that do not sum to the total', () => {
     expect(() => allocateSplit(1000, { mode: 'exact', values: { a: 250, b: 700 } })).toThrow(
       /under by ₹0\.50/,

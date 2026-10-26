@@ -84,7 +84,10 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
       myId: identityId,
       myName: identityName,
       groups: summaries.map((s) => ({ id: s.groupId, name: s.name })),
-      members: [],
+      members: summaries.find((s) => s.groupId === (summaries[0]?.groupId ?? ''))?.members.map((m) => ({
+        id: m.id,
+        name: m.name,
+      })) ?? [],
       currentGroupId: summaries[0]?.groupId,
     })
     const command = parsed.command
@@ -146,7 +149,11 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
               date: Date.now(),
               category: 'other',
               payers: [{ memberId: finalPayerId, amountPaise }],
-              split: { mode: splitMode, participants: participantIds },
+              split:
+                command.splitMode === 'exact' || command.splitMode === 'percent'
+                  ? { mode: command.splitMode, values: command.splitValues ?? {} }
+                  : { mode: splitMode, participants: participantIds },
+              notes: command.notes || undefined,
             })
             if (!ok) throw new Error('The expense was not saved.')
             await store.fetchGroupSummaries()

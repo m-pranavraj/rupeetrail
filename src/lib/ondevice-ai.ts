@@ -30,7 +30,7 @@ export async function extractTextFromImage(file: Blob, lang = 'eng'): Promise<Oc
     }
     return { text: result.data.text.trim() }
   } finally {
-    await (worker as unknown as { terminate: () => Promise<void> }).terminate().catch(() => {})
+    await (worker as unknown as { terminate: () => Promise<void> }).terminate().catch(() => { })
   }
 }
 
@@ -196,12 +196,13 @@ async function fallbackExtract(text: string): Promise<ParsedReceipt | null> {
 export type AiCommand =
   | { type: 'create_group'; name: string; emoji: string }
   | { type: 'join_group'; code: string }
-  | { type: 'add_expense'; description: string; amountPaise: number; splitMode: 'equal' | 'exact' | 'percent'; participantIds: string[]; payerId: string; notes: string }
+  | { type: 'add_expense'; description: string; amountPaise: number; splitMode: 'equal' | 'exact' | 'percent'; participantIds: string[]; payerId: string; notes: string; splitValues?: Record<string, number> }
   | { type: 'delete_expense'; expenseId: string; groupId: string }
   | { type: 'edit_expense'; expenseId: string; groupId: string; description?: string; amountPaise?: number }
   | { type: 'record_settlement'; fromId: string; toId: string; amountPaise: number; groupId: string; method: 'upi' | 'cash' | 'bank' }
   | { type: 'confirm_payment'; settlementId: string }
   | { type: 'open_group'; groupId: string }
+  | { type: 'switch_tab'; tab: 'expenses' | 'balances' | 'settle' }
   | { type: 'show_balances'; groupId: string }
   | { type: 'show_help'; text: string }
 
@@ -426,7 +427,7 @@ export function parseVoiceCommand(
         ok: true,
         command: {
           type: 'record_settlement',
-          fromId: `manual:${senderName}`,
+          fromId: `manual:from:${senderName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`,
           toId: context.myId,
           amountPaise: amount,
           groupId: context.currentGroupId!,
@@ -437,14 +438,13 @@ export function parseVoiceCommand(
     }
 
     if (amount !== null) {
-      // No named sender but we have an amount — record against the first member
-      // as a placeholder so the ledger changes; the user can fix names in the sheet.
-      const fallbackFrom = members[0]?.id ?? context.myId
+      // Without a name, keep the payment valid and visible as an unnamed
+      // manual counterparty rather than accidentally selecting the current user.
       return {
         ok: true,
         command: {
           type: 'record_settlement',
-          fromId: fallbackFrom,
+          fromId: 'manual:from:someone',
           toId: context.myId,
           amountPaise: amount,
           groupId: context.currentGroupId!,
@@ -460,13 +460,39 @@ export function parseVoiceCommand(
     }
   }
 
-  // ---- Add an expense (the big one) ----
-  const expenseHint = /\b(dinner|lunch|breakfast|coffee|tea|beer|wine|drinks?|food|cab|taxi|auto|uber|ola|hotel|stay|room|grocery|shop|movie|ticket|fuel|petrol|rent|shopping|bill|total|amount|cost)\b/i.test(lower)
-  const hasAmount = /[0-9][0-9,]{1,6}(?:\.[0-9]{1,2})?/.test(lower)
-  const isSmartSplit = /\b(smart|ai|Intelligent|auto|automatically|for\s+me|do\s+it|figure\s+it)\b/i.test(lower)
+  // ---- Switch tab ----
+  const tabMatch = lower.match(/\b(?:go\s+to|show|open|switch\s+to|view)\s+(?:the\s+)?(expenses?|balances?|settle(?:ment)?s?)\s*(?:tab)?\b/i)
+  if (tabMatch) {
+    const tabWord = tabMatch[1].toLowerCase()
+    const tab: 'expenses' | 'balances' | 'settle' =
+      tabWord.startsWith('exp') ? 'expenses'
+        : tabWord.startsWith('bal') ? 'balances'
+          : 'settle'
+    return {
+      ok: true,
+      command: { type: 'switch_tab', tab },
+      reply: `Switching to the ${tab} tab.`,
+    }
+  }
 
-  if ((expenseHint || hasAmount) && !/\b(settled|paid\s+me|received|got\s+it|join|create|delete|edit|remove|change|update)\b/.test(lower)) {
-    let totalAmount = findAmountNear(lower, ['total', 'bill', 'amount', 'cost', 'was', 'is', 'for', 'together', 'overall'])
+  // ---- Add an expense (the big one) ----
+  const expenseHint = /\b(dinner|lunch|breakfast|coffee|tea|beer|wine|drinks?|food|cab|taxi|auto|uber|ola|hotel|stay|room|grocery|shop|movie|ticket|fuel|petrol|rent|shopping|bill|total|amount|cost|expense)\b/i.test(lower)
+  const hasAmount = /[0-9][0-9,]{1,6}(?:\.[0-9]{1,2})?/.test(lower)
+  const isSmartSplit = /\b(smart|ai|intelligent|auto|automatically|for\s+me|do\s+it|figure\s+it)\b/i.test(lower)
+
+  if ((expenseHint || hasAmount) && !/\b(settled|paid\s+me|received|got\s+it|join|create|delete|edit|remove|change|update|join)\b/.test(lower)) {
+    // ---- GST extraction ----
+    // "GST 60", "GST 18%", "plus GST 60 rupees" → add to total
+    let gstPaise = 0
+    const gstFixed = lower.match(/gst\s+(?:of\s+)?(?:₹|rs\.?\s*)?([0-9][0-9,]{0,5}(?:\.[0-9]{1,2})?)(?:\s*rupees?)?(?!\s*%)/i)
+    if (gstFixed) {
+      const v = parseAmount(gstFixed[1])
+      if (v !== null) gstPaise = v
+    }
+    const gstPctMatch = lower.match(/gst\s*([0-9]{1,2})\s*%/i)
+    const gstNote = gstPctMatch ? `GST ${gstPctMatch[1]}%` : gstPaise > 0 ? `GST ₹${(gstPaise / 100).toFixed(0)}` : ''
+
+    let totalAmount = findAmountNear(lower, ['total', 'bill', 'amount', 'cost', 'was', 'is', 'together', 'overall'])
     if (totalAmount === null) {
       const allNums = lower.match(/(?:₹|rs\.?)?([0-9][0-9,]{1,6}(?:\.[0-9]{1,2})?)/g)
       if (allNums) {
@@ -474,17 +500,21 @@ export function parseVoiceCommand(
         if (nums.length > 0) totalAmount = Math.max(...nums)
       }
     }
+    // A stated bill/total normally already includes its GST line. Only add a
+    // fixed tax when the speaker explicitly says it is extra.
+    const gstIsExtra = /\b(?:plus|extra|add|before\s+gst|excluding)\b[^.]{0,20}\bgst\b/i.test(lower)
+    if (totalAmount !== null && gstPaise > 0 && !gstPctMatch && gstIsExtra) totalAmount += gstPaise
 
     if (totalAmount !== null && totalAmount >= 100) {
       let description = 'Expense'
-      const descMatch = t.match(/([A-Z][\w\s'-]{3,60}(?:dinner|lunch|breakfast|coffee|tea|beer|wine|food|cab|taxi|auto|hotel|stay|grocery|shop|movie|ticket|fuel|rent|shopping|bill|total))\b/i)
-      if (descMatch) {
+      const descMatch = t.match(/^([A-Za-z][\w\s'-]{2,50}?)(?:\s+\d|,)/i)
+      if (descMatch && !/^(bill|total|amount|split|the|a|an|my|all|each|between|among|for)/i.test(descMatch[1].trim())) {
         description = descMatch[1].trim()
       } else {
         const parts = t.split(/[,;.]/).map((p) => p.trim()).filter(Boolean)
         for (const part of parts) {
           if (/[0-9]/.test(part)) continue
-          if (part.length > 3 && /[A-Z]/.test(part[0])) {
+          if (part.length > 3 && /[A-Za-z]/.test(part[0]) && !/^(split|between|among|for|all|the|and|gst|tax|rupees?)/i.test(part)) {
             description = part.slice(0, 60)
             break
           }
@@ -493,45 +523,129 @@ export function parseVoiceCommand(
 
       let splitMode: 'equal' | 'exact' | 'percent' = 'equal'
       let participantIds = members.map((m) => m.id)
+      let splitValues: Record<string, number> | undefined
       const payerId = context.myId
 
-      const allSplit = /\b(split|share|divide|among|between|for)\b/i.test(lower)
       const namedShares = extractNamedAmounts(t, members)
 
+      // --- Count-based split: "2 ate 500, 3 ate the rest", "2 people 500, remaining 3" ---
+      const countGroups: { count: number; amountPaise: number | null }[] = []
+      const countRe = /\b(\d+)\s*(?:people?|persons?|of\s+us|ate|had|spent|paid|took)?\s+(?:for\s+)?(?:₹|rs\.?\s*)?([0-9][0-9,]{0,5}(?:\.[0-9]{1,2})?)(?:\s*rupees?)?(?!\s*each)(\s+(?:remaining|rest|other|left))?/gi
+      let cg: RegExpExecArray | null
+      while ((cg = countRe.exec(lower)) !== null) {
+        if (/\beach\b/i.test(cg[0])) continue
+        const count = parseInt(cg[1])
+        const amt = parseAmount(cg[2])
+        if (count >= 2 && count <= 20 && amt !== null && amt >= 100) {
+          countGroups.push({ count, amountPaise: amt })
+        }
+      }
+      // Also look for "N ate each" meaning N people split subamount equally
+      const eachRe = /\b(\d+)\s*(?:people?|persons?)?\s+(?:ate?|had|spent)\s+(?:for\s+)?(?:₹|rs\.?\s*)?([0-9][0-9,]{0,5})(?:\s*each)/gi
+      while ((cg = eachRe.exec(lower)) !== null) {
+        const count = parseInt(cg[1])
+        const eachAmt = parseAmount(cg[2])
+        if (count >= 1 && eachAmt !== null) {
+          countGroups.push({ count, amountPaise: eachAmt * count })
+        }
+      }
+
       if (namedShares.length > 0) {
+        // Named amounts: "Priya 250, Rahul 300, rest equal"
         splitMode = 'exact'
-        participantIds = namedShares.map((ns) => resolveName(ns.name, members)).filter(Boolean) as string[]
-        const mentionedNames = new Set(namedShares.map((ns) => ns.name.toLowerCase()))
-        const unmentioned = members.filter((m) => !mentionedNames.has(m.name.toLowerCase()))
-        if (unmentioned.length > 0) {
-          const assigned = namedShares.reduce((s, ns) => s + ns.amountPaise, 0)
-          const remainder = totalAmount - assigned
-          if (remainder > 0 && unmentioned.length > 0) {
-            const each = Math.round(remainder / unmentioned.length)
-            for (const m of unmentioned) {
-              participantIds.push(m.id)
+        const values: Record<string, number> = {}
+        let assignedPaise = 0
+        const assignedIds = new Set<string>()
+        for (const ns of namedShares) {
+          const id = resolveName(ns.name, members)
+          if (id) {
+            values[id] = ns.amountPaise
+            assignedPaise += ns.amountPaise
+            assignedIds.add(id)
+          }
+        }
+        const unassigned = members.filter((m) => !assignedIds.has(m.id))
+        const remainder = totalAmount - assignedPaise
+        if (remainder > 0 && unassigned.length > 0) {
+          const each = Math.round(remainder / unassigned.length)
+          for (const m of unassigned) {
+            values[m.id] = each
+            assignedIds.add(m.id)
+          }
+          // Fix rounding: give leftover to last person
+          const actual = Object.values(values).reduce((a, b) => a + b, 0)
+          if (actual !== totalAmount) {
+            const lastId = unassigned[unassigned.length - 1]?.id
+            if (lastId) values[lastId] += totalAmount - actual
+          }
+        }
+        participantIds = Object.keys(values)
+        splitValues = values
+      } else if (countGroups.length > 0) {
+        // Count-based: "2 people 500, remaining 3" → distribute evenly inside each group
+        // Map to member IDs in order
+        splitMode = 'exact'
+        const values: Record<string, number> = {}
+        let memberIdx = 0
+        let assignedTotal = 0
+        for (const grp of countGroups) {
+          if (grp.amountPaise === null) continue
+          const each = Math.round(grp.amountPaise / grp.count)
+          for (let i = 0; i < grp.count; i++) {
+            if (memberIdx < members.length) {
+              values[members[memberIdx].id] = each
+              assignedTotal += each
+              memberIdx++
             }
           }
         }
+        // Remaining members split the leftover
+        const leftover = totalAmount - assignedTotal
+        const remaining = members.slice(memberIdx)
+        if (leftover > 0 && remaining.length > 0) {
+          const eachLeft = Math.round(leftover / remaining.length)
+          for (const m of remaining) {
+            values[m.id] = eachLeft
+          }
+        }
+        // Fix rounding
+        const actual = Object.values(values).reduce((a, b) => a + b, 0)
+        if (actual !== totalAmount && Object.keys(values).length > 0) {
+          const lastKey = Object.keys(values)[Object.keys(values).length - 1]
+          values[lastKey] += totalAmount - actual
+        }
+        participantIds = Object.keys(values)
+        splitValues = values
       } else if (/\b(equal|evenly|everyone|all|same|equally)\b/i.test(lower)) {
         splitMode = 'equal'
-        participantIds = members.map((m) => m.id)
+        // Check "between N people" for count override
+        const nMatch = lower.match(/between\s+(\d+)\s*(?:people?|persons?|of\s+us)?/i)
+        if (nMatch) {
+          const n = parseInt(nMatch[1])
+          participantIds = members.slice(0, Math.min(n, members.length)).map((m) => m.id)
+        } else {
+          participantIds = members.map((m) => m.id)
+        }
       } else if (/\b(percent|percentage|%|percentages)\b/i.test(lower)) {
         splitMode = 'percent'
         participantIds = members.map((m) => m.id)
-      } else if (allSplit || members.length <= 1) {
+      } else {
+        // Default: equal split
         splitMode = 'equal'
-        participantIds = members.map((m) => m.id)
-      } else if (isSmartSplit) {
-        // Smart AI split: try to figure out based on context
-        // If we have names mentioned but no amounts, split equally
-        if (members.length > 0) {
-          splitMode = 'equal'
+        const nMatch = lower.match(/(?:between|among|for|split)\s+(\d+)\s*(?:people?|persons?|of\s+us|ways?)?/i)
+        if (nMatch) {
+          const n = parseInt(nMatch[1])
+          participantIds = members.slice(0, Math.min(n, members.length)).map((m) => m.id)
+        } else {
           participantIds = members.map((m) => m.id)
         }
       }
 
-      const gstMatch = lower.match(/gst\s*([0-9]{1,2})\s*%/i)
+      const replyDetail = splitMode === 'exact' && splitValues
+        ? `exact split (${Object.entries(splitValues).map(([id, p]) => `${members.find(m => m.id === id)?.name ?? id} ₹${(p / 100).toFixed(0)}`).join(', ')})`
+        : splitMode === 'equal'
+          ? `equally among ${participantIds.length} people`
+          : 'by percentage'
 
       return {
         ok: true,
@@ -542,9 +656,10 @@ export function parseVoiceCommand(
           splitMode,
           participantIds,
           payerId,
-          notes: gstMatch ? `GST ${gstMatch[1]}%` : '',
+          notes: gstNote,
+          splitValues,
         },
-        reply: `Adding “${description}” for ₹${(totalAmount / 100).toFixed(2)} split ${splitMode === 'equal' ? 'equally' : splitMode === 'exact' ? 'by exact amounts' : 'by percentage'} — done. ${isSmartSplit ? 'AI-optimized split applied.' : ''}`,
+        reply: `Adding "${description}" for ₹${(totalAmount / 100).toFixed(2)} — ${replyDetail}. ${isSmartSplit ? 'AI-optimized.' : ''}`,
       }
     }
 
@@ -638,16 +753,17 @@ function commandHelp(): string {
     'Join: "Join with code ABC123"',
     'Add expense: "Dinner 1256 rupees, split between 5 of us"',
     'Add with shares: "Lunch 800, Priya 250, Rahul 300, rest equal"',
-    'Add with GST: "Bill 1500, GST 18%, split 4 ways"',
-    'Smart split: "AI split 2000 among 5 people equally" or "Smart divide this bill"',
+    'Add with GST: "Bill 1256, GST 60, split 5 people, 2 ate 500, 3 split rest"',
+    'Count-based: "5 people, 2 ate for 500, remaining 3 split the rest"',
+    'Smart split: "AI split 2000 among 5 people equally"',
     'Record payment: "I got 500 rupees from Priya" or "Rahul paid me 800"',
     'Delete: "Delete the last expense" or "Remove that bill"',
     'Edit: "Edit the amount to 1200"',
     'Balances: "Show me the balances" or "Who owes what?"',
-    'Open: "Open the group"',
+    'Switch tab: "Go to balances" or "Show settle tab"',
     'Help: "Help"',
-    'AI mode: "AI do the calculation" or "Smart compute this"',
-  ].join('\n')}
+  ].join('\n')
+}
 
 /** OCR a bill photo and parse it into a structured receipt.
  * Falls back to regex extraction if Tesseract produces nothing useful. */
@@ -664,7 +780,7 @@ export async function captureBillOnDevice(file: Blob): Promise<CaptureResult> {
     try {
       const textContent = await file.text().catch(() => '')
       if (textContent && textContent.trim().length > 2) text = textContent
-    } catch {}
+    } catch { }
   }
 
   if (!text || text.trim().length < 2) {

@@ -13,6 +13,10 @@ export interface GroupSnapshot {
   me: { id: string; name: string; upiId?: string; color: number }
 }
 
+export interface SettlementCreated extends GroupSnapshot {
+  settlementId: string
+}
+
 export interface Authored extends GroupSnapshot {
   token: string
 }
@@ -307,8 +311,8 @@ export function addSettlement(
   groupId: string,
   auth: Credentials,
   input: { from: string; to: string; amountPaise: number; method: Settlement['method']; note?: string },
-): Promise<GroupSnapshot> {
-  return call(`/api/groups/${encodeURIComponent(groupId)}/settlements`, {
+): Promise<SettlementCreated> {
+  return call<SettlementCreated>(`/api/groups/${encodeURIComponent(groupId)}/settlements`, {
     method: 'POST',
     auth,
     body: input,

@@ -80,9 +80,21 @@ export function computeBalances({ group, expenses, settlements }: BalanceInput):
     }
   }
 
-  // Settlements only count once both sides (or a provider) attest.
+  // Settlements count as soon as they are recorded. A settlement is
+  // "effective" when either:
+  //   • it is fully confirmed by both parties
+  //   • it involves a manual (non-app) party from whom the current user
+  //     can never get a counter-confirmation
+  //
+  // This makes the balance update immediately for manual payments.
   for (const s of settlements) {
-    if (s.status !== 'confirmed') continue
+    if (s.status === 'disputed') continue
+    const fromIsManual = s.from.startsWith('manual:')
+    const toIsManual = s.to.startsWith('manual:')
+    // A manual-party settlement is always effective; fully-in-group ones
+    // require both sides to confirm before counting.
+    const effective = s.status === 'confirmed' || fromIsManual || toIsManual
+    if (!effective) continue
 
     const syntheticFrom = s.from.startsWith('manual:')
     const syntheticTo = s.to.startsWith('manual:')
