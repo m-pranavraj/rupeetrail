@@ -1406,6 +1406,38 @@ h3 {
   color: var(--ink-soft);
 }
 
+.voice-strip > div:last-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.voice-form {
+  display: flex;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.voice-form input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  background: #fffefb;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.voice-form input:focus {
+  border-color: var(--forest-3);
+  box-shadow: 0 0 0 3px rgba(47, 107, 87, 0.12);
+}
+
+.voice-form .btn {
+  flex: none;
+}
+
 .voice-feedback {
   display: flex;
   align-items: center;

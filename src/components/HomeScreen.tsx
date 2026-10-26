@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore, type GroupSummary } from '../lib/store'
 import { formatPaise } from '../lib/money'
 import { isValidUpi } from '../lib/upi'
@@ -9,9 +9,28 @@ import { parseVoiceCommand } from '../lib/ondevice-ai'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (HomeScreen as any).default = 'ic802344172_home_screen'
 
-const EMOJI_CHOICES = ['🏖️', '🏠', '✈️', '🎉', '🍻', '🏏', '🎓', '🚗', '🎿', '🍕', '💼', '🌮']
+const EMOJI_CHOICES = ['🏖️', '🏠', '✈️', '🎉', '🍻', '🏏', '🎓', '🚀', '🎿', '🍕', '💼', '🌮']
 
 type PendingAction = { action: string; confirm: () => void; cancel: () => void }
+
+/** Turn a SpeechRecognition error code into something a person can act on. */
+function messageForSpeechError(code?: string): string {
+  switch (code) {
+    case 'not-allowed':
+    case 'service-not-allowed':
+      return 'The microphone is blocked for this site. Allow mic access in the address bar, or type the command below.'
+    case 'audio-capture':
+      return 'No microphone was found. Plug one in, or type the command below.'
+    case 'network':
+      return 'This browser needs a network connection for speech. Type the command below instead.'
+    case 'no-speech':
+      return 'I did not hear anything. Try again, or type the command below.'
+    case 'language-not-supported':
+      return 'This browser cannot recognise Indian English. Type the command below instead.'
+    default:
+      return `Voice input failed${code ? ` (${code})` : ''}. Type the command below instead.`
+  }
+}
 
 export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void }) {
   const store = useStore()
@@ -25,14 +44,26 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
   const [voiceBusy, setVoiceBusy] = useState(false)
   const [voiceError, setVoiceError] = useState('')
   const [voiceTranscript, setVoiceTranscript] = useState('')
+  const [typed, setTyped] = useState('')
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
+  const watchdogRef = useRef<number | null>(null)
+  const recognitionRef = useRef<any>(null)
 
-  // Keep every card's net position fresh: settlements recorded on another phone
-  // (or in another tab) land here as soon as the home screen mounts.
   const fetchSummaries = store.fetchGroupSummaries
   useEffect(() => {
     void fetchSummaries()
   }, [fetchSummaries])
+
+  useEffect(() => {
+    return () => {
+      if (watchdogRef.current !== null) window.clearTimeout(watchdogRef.current)
+      try {
+        recognitionRef.current?.abort?.()
+      } catch {
+        /* already stopped */
+      }
+    }
+  }, [])
 
   const cancelPending = () => {
     setPendingAction(null)
@@ -40,16 +71,178 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
     setVoiceBusy(false)
   }
 
-  const startVoice = () => {
+  /** One place that understands a command, whether it was spoken or typed. */
+  const runTranscript = (transcript: string) => {
+    const text = transcript.trim()
+    if (!text) {
+      setVoiceError('Type a command first, like “Dinner 1200 split between 5”.')
+      return
+    }
+    setVoiceTranscript(text)
+
+    const parsed = parseVoiceCommand(text, {
+      myId: identityId,
+      myName: identityName,
+      groups: summaries.map((s) => ({ id: s.groupId, name: s.name })),
+      members: [],
+      currentGroupId: summaries[0]?.groupId,
+    })
+    const command = parsed.command
+
+    if (command?.type === 'create_group') {
+      const { name, emoji } = command
+      setPendingAction({
+        action: `Create a group called “${name}”?`,
+        confirm: async () => {
+          setPendingAction(null)
+          try {
+            const id = await createGroup(name, emoji)
+            setVoiceStatus(`Created “${name}” — share the invite so people can join.`)
+            onOpenGroup(id)
+          } catch (cause) {
+            setVoiceError(cause instanceof Error ? cause.message : 'Could not create the group.')
+          }
+        },
+        cancel: cancelPending,
+      })
+      return
+    }
+
+    if (command?.type === 'join_group') {
+      const { code } = command
+      setPendingAction({
+        action: `Join the group with code ${code}?`,
+        confirm: async () => {
+          setPendingAction(null)
+          try {
+            const id = await joinGroup(code)
+            setVoiceStatus('Joined — you’re in.')
+            onOpenGroup(id)
+          } catch (cause) {
+            setVoiceError(cause instanceof Error ? cause.message : 'Could not join that group.')
+          }
+        },
+        cancel: cancelPending,
+      })
+      return
+    }
+
+    if (command?.type === 'add_expense' && command.amountPaise >= 100) {
+      const target = summaries[0] as GroupSummary | undefined
+      if (!target) {
+        setVoiceError('Create a group first, then I can add expenses to it.')
+        return
+      }
+      const { description, amountPaise, splitMode, payerId, participantIds } = command
+      const finalPayerId = target.members.some((m) => m.id === payerId) ? payerId : identityId
+      setPendingAction({
+        action: `Add “${description}” for ₹${(amountPaise / 100).toFixed(2)} to ${target.name}?`,
+        confirm: async () => {
+          setPendingAction(null)
+          try {
+            const ok = await store.addExpense(target.groupId, {
+              description,
+              amountPaise,
+              date: Date.now(),
+              category: 'other',
+              payers: [{ memberId: finalPayerId, amountPaise }],
+              split: { mode: splitMode, participants: participantIds },
+            })
+            if (!ok) throw new Error('The expense was not saved.')
+            await store.fetchGroupSummaries()
+            setVoiceStatus(`Added “${description}” to ${target.name}.`)
+          } catch (cause) {
+            setVoiceError(cause instanceof Error ? cause.message : 'Could not add the expense.')
+          }
+        },
+        cancel: cancelPending,
+      })
+      return
+    }
+
+    if (command?.type === 'delete_expense') {
+      const active = store.active
+      if (!active) {
+        setVoiceError('Open the group first, then ask me to delete an expense.')
+        return
+      }
+      const newest = [...active.expenses].sort((a, b) => b.date - a.date)[0]
+      if (!newest) {
+        setVoiceError('That group has no expenses yet.')
+        return
+      }
+      setPendingAction({
+        action: `Delete “${newest.description}” from ${active.group.name}? This cannot be undone.`,
+        confirm: async () => {
+          setPendingAction(null)
+          try {
+            store.deleteExpense(active.group.id, newest.id)
+            await store.fetchGroupSummaries()
+            setVoiceStatus('Expense deleted.')
+          } catch (cause) {
+            setVoiceError(cause instanceof Error ? cause.message : 'Could not delete that expense.')
+          }
+        },
+        cancel: cancelPending,
+      })
+      return
+    }
+
+    if (command?.type === 'record_settlement') {
+      const { fromId, toId, amountPaise, groupId, method } = command
+      setPendingAction({
+        action: `Record a ₹${(amountPaise / 100).toFixed(2)} ${method} payment?`,
+        confirm: async () => {
+          setPendingAction(null)
+          try {
+            const ok = await store.recordSettlement(groupId, fromId, toId, amountPaise, method)
+            if (!ok) throw new Error('The payment was not recorded.')
+            await store.fetchGroupSummaries()
+            setVoiceStatus(parsed.reply)
+          } catch (cause) {
+            setVoiceError(cause instanceof Error ? cause.message : 'Could not record the payment.')
+          }
+        },
+        cancel: cancelPending,
+      })
+      return
+    }
+
+    setVoiceStatus(parsed.reply)
+  }
+
+  const clearWatchdog = () => {
+    if (watchdogRef.current !== null) {
+      window.clearTimeout(watchdogRef.current)
+      watchdogRef.current = null
+    }
+  }
+
+  const startVoice = async () => {
     const SpeechRecognition: any =
       typeof window === 'undefined'
         ? null
         : (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     if (!SpeechRecognition) {
-      setVoiceError('This browser cannot listen. Type the command instead.')
+      setVoiceError('This browser has no speech recognition. Type the command below instead.')
       return
     }
+
+    // Check the permission before starting: some browsers never fire onerror
+    // when the mic is blocked, which used to leave the button stuck forever.
+    try {
+      const status = await navigator.permissions.query({ name: 'microphone' as PermissionName })
+      if (status.state === 'denied') {
+        setVoiceError(messageForSpeechError('not-allowed'))
+        return
+      }
+    } catch {
+      // Permission query is not supported everywhere; carry on and let the
+      // recognition error tell us what happened.
+    }
+
     const recognition = new SpeechRecognition()
+    recognitionRef.current = recognition
     recognition.lang = 'en-IN'
     recognition.continuous = false
     recognition.interimResults = false
@@ -60,163 +253,54 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
     setVoiceTranscript('')
 
     recognition.onresult = (event: any) => {
+      clearWatchdog()
+      setVoiceBusy(false)
       const transcript = Array.from(event.results as ArrayLike<any>)
         .map((result: any) => result[0]?.transcript ?? '')
         .join(' ')
         .trim()
-      if (!transcript) {
-        setVoiceBusy(false)
-        setVoiceError('I did not catch that. Try again.')
-        return
-      }
-      setVoiceTranscript(transcript)
+      runTranscript(transcript)
+    }
 
-      const parsed = parseVoiceCommand(transcript, {
-        myId: identityId,
-        myName: identityName,
-        groups: summaries.map((s) => ({ id: s.groupId, name: s.name })),
-        members: [],
-        currentGroupId: summaries[0]?.groupId,
-      })
-      const command = parsed.command
+    recognition.onerror = (event: any) => {
+      clearWatchdog()
+      setVoiceBusy(false)
+      if (event?.error !== 'aborted') setVoiceError(messageForSpeechError(event?.error))
+    }
 
-      if (command?.type === 'create_group') {
-        const { name, emoji } = command
-        setPendingAction({
-          action: `Create a group called “${name}”?`,
-          confirm: async () => {
-            setPendingAction(null)
-            try {
-              const id = await createGroup(name, emoji)
-              setVoiceStatus(`Created “${name}” — share the invite so people can join.`)
-              onOpenGroup(id)
-            } catch (cause) {
-              setVoiceError(cause instanceof Error ? cause.message : 'Could not create the group.')
-            }
-            setVoiceBusy(false)
-          },
-          cancel: cancelPending,
-        })
-        return
-      }
-
-      if (command?.type === 'join_group') {
-        const { code } = command
-        setPendingAction({
-          action: `Join the group with code ${code}?`,
-          confirm: async () => {
-            setPendingAction(null)
-            try {
-              const id = await joinGroup(code)
-              setVoiceStatus('Joined — you’re in.')
-              onOpenGroup(id)
-            } catch (cause) {
-              setVoiceError(cause instanceof Error ? cause.message : 'Could not join that group.')
-            }
-            setVoiceBusy(false)
-          },
-          cancel: cancelPending,
-        })
-        return
-      }
-
-      if (command?.type === 'add_expense' && command.amountPaise >= 100) {
-        const target = summaries[0] as GroupSummary | undefined
-        if (!target) {
-          setVoiceError('Create a group first, then I can add expenses to it.')
-          setVoiceBusy(false)
-          return
-        }
-        const { description, amountPaise, splitMode, payerId, participantIds } = command
-        const finalPayerId = target.members.some((m) => m.id === payerId) ? payerId : identityId
-        setPendingAction({
-          action: `Add “${description}” for ₹${(amountPaise / 100).toFixed(2)} to ${target.name}?`,
-          confirm: async () => {
-            setPendingAction(null)
-            try {
-              const ok = await store.addExpense(target.groupId, {
-                description,
-                amountPaise,
-                date: Date.now(),
-                category: 'other',
-                payers: [{ memberId: finalPayerId, amountPaise }],
-                split: { mode: splitMode, participants: participantIds },
-              })
-              if (!ok) throw new Error('The expense was not saved.')
-              await store.fetchGroupSummaries()
-              setVoiceStatus(`Added “${description}” to ${target.name}.`)
-            } catch (cause) {
-              setVoiceError(cause instanceof Error ? cause.message : 'Could not add the expense.')
-            }
-            setVoiceBusy(false)
-          },
-          cancel: cancelPending,
-        })
-        return
-      }
-
-      if (command?.type === 'delete_expense') {
-        const active = store.active
-        if (!active) {
-          setVoiceError('Open the group first, then ask me to delete an expense.')
-          setVoiceBusy(false)
-          return
-        }
-        const newest = [...active.expenses].sort((a, b) => b.date - a.date)[0]
-        if (!newest) {
-          setVoiceError('That group has no expenses yet.')
-          setVoiceBusy(false)
-          return
-        }
-        setPendingAction({
-          action: `Delete “${newest.description}” from ${active.group.name}? This cannot be undone.`,
-          confirm: async () => {
-            setPendingAction(null)
-            try {
-              store.deleteExpense(active.group.id, newest.id)
-              await store.fetchGroupSummaries()
-              setVoiceStatus('Expense deleted.')
-            } catch (cause) {
-              setVoiceError(cause instanceof Error ? cause.message : 'Could not delete that expense.')
-            }
-            setVoiceBusy(false)
-          },
-          cancel: cancelPending,
-        })
-        return
-      }
-
-      if (command?.type === 'record_settlement') {
-        const { fromId, toId, amountPaise, groupId, method } = command
-        setPendingAction({
-          action: `Record a ₹${(amountPaise / 100).toFixed(2)} ${method} payment?`,
-          confirm: async () => {
-            setPendingAction(null)
-            try {
-              const ok = await store.recordSettlement(groupId, fromId, toId, amountPaise, method)
-              if (!ok) throw new Error('The payment was not recorded.')
-              await store.fetchGroupSummaries()
-              setVoiceStatus(parsed.reply)
-            } catch (cause) {
-              setVoiceError(cause instanceof Error ? cause.message : 'Could not record the payment.')
-            }
-            setVoiceBusy(false)
-          },
-          cancel: cancelPending,
-        })
-        return
-      }
-
-      setVoiceStatus(parsed.reply)
+    recognition.onend = () => {
+      clearWatchdog()
       setVoiceBusy(false)
     }
 
-    recognition.onerror = () => {
-      setVoiceError('Could not listen. Try again.')
+    watchdogRef.current = window.setTimeout(() => {
+      clearWatchdog()
       setVoiceBusy(false)
+      setVoiceError('The microphone did not respond. Type the command below instead.')
+      try {
+        recognition.abort()
+      } catch {
+        /* already stopped */
+      }
+    }, 12000)
+
+    try {
+      recognition.start()
+    } catch (cause) {
+      clearWatchdog()
+      setVoiceBusy(false)
+      setVoiceError(cause instanceof Error ? messageForSpeechError(cause.message) : messageForSpeechError())
     }
-    recognition.onend = () => setVoiceBusy(false)
-    recognition.start()
+  }
+
+  const submitTyped = (event: React.FormEvent) => {
+    event.preventDefault()
+    const text = typed.trim()
+    if (!text) return
+    setTyped('')
+    setVoiceStatus('')
+    setVoiceError('')
+    runTranscript(text)
   }
 
   const totals = useMemo(() => {
@@ -296,7 +380,7 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
                       : 'Everything is square.'}
                 </div>
               </div>
-              <button className="text-btn" onClick={startVoice} disabled={voiceBusy}>
+              <button className="text-btn" onClick={() => void startVoice()} disabled={voiceBusy}>
                 <IconMic size={15} />
                 {voiceBusy ? 'Listening…' : 'Speak'}
               </button>
@@ -324,11 +408,22 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
               <IconMic size={16} />
             </div>
             <div>
-              <strong>Control the app with your voice</strong>
+              <strong>Tell it what happened</strong>
               <p>
-                “Create a group called Goa trip”, “Dinner 1256 split between 5 of us”, “I got 500
-                from Priya”, “Delete the last expense”. The AI understands plain language.
+                Speak or type: “Create a group called Goa trip”, “Dinner 1256 split between 5 of
+                us”, “I got 500 from Priya”, “Delete the last expense”.
               </p>
+              <form className="voice-form" onSubmit={submitTyped}>
+                <input
+                  value={typed}
+                  onChange={(e) => setTyped(e.target.value)}
+                  placeholder="Type a command…"
+                  aria-label="Type a command"
+                />
+                <button className="btn btn--primary btn--tiny" type="submit" disabled={!typed.trim()}>
+                  Run
+                </button>
+              </form>
             </div>
           </div>
 
