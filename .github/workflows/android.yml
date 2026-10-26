@@ -120,7 +120,7 @@ jobs:
           APK=app/build/outputs/apk/release/app-release.apk
           test -f "$APK"
           ls -lh "$APK"
-          sha256sum "$APK" | tee app-release.apk.sha256
+          sha256sum "$APK" | tee app/build/outputs/apk/release/app-release.apk.sha256
           "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify --print-certs "$APK" | head -5
           "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt" dump badging "$APK" | grep -E "package:|application-label:" | head -3
 
