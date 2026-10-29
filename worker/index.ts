@@ -1161,7 +1161,7 @@ async function addSettlement(
     {
       ...snapshot(doc, revision, auth.me),
       settlementId: settlement.id,
-      message: `Recorded ${memberName(doc, from)} paying ${memberName(doc, to)}. Both sides need to confirm before balances move.`,
+      message: `Recorded ${memberName(doc, from)} paying ${memberName(doc, to)}. Balances updated — confirmations are kept as an audit trail.`,
     },
     201,
   )
