@@ -148,6 +148,13 @@ export function logoutAccount(token: string): Promise<{ ok: boolean }> {
   return call<{ ok: boolean }>('/api/auth/logout', { method: 'POST', userToken: token })
 }
 
+/** Re-mint group tokens with the account token, so a stale device can heal. */
+export function refreshSession(token: string): Promise<{ user: AuthUser; memberships: AuthMembership[] }> {
+  return call<{ user: AuthUser; memberships: AuthMembership[] }>('/api/auth/session', {
+    userToken: token,
+  })
+}
+
 /* ---------------------------------------------------------------- groups */
 
 export function createGroup(
@@ -291,7 +298,7 @@ export function addSettlement(
   groupId: string,
   auth: Credentials,
   input: { from: string; to: string; amountPaise: number; method: Settlement['method']; note?: string },
-): Promise<GroupSnapshot> {
+): Promise<GroupSnapshot & { settlementId?: string; message?: string }> {
   return call(`/api/groups/${encodeURIComponent(groupId)}/settlements`, {
     method: 'POST',
     auth,

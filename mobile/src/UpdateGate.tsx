@@ -16,6 +16,9 @@ export function UpdateGate() {
   const [dismissedCode, setDismissedCode] = useState<number | null>(null)
 
   const check = useCallback(async () => {
+    // A build with no stamped version (local dev) has nothing meaningful to
+    // compare, and prompting would only offer that same build forever.
+    if (APP_VERSION_CODE <= 1) return
     try {
       const response = await fetchRelease('android', RELEASE_CHANNEL, APP_VERSION_CODE)
       setRelease(response.latest && response.latest.versionCode > APP_VERSION_CODE ? response.latest : null)

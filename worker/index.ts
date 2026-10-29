@@ -412,7 +412,10 @@ async function membershipsForUser(env: Env, user: UserRow): Promise<AuthMembersh
       const member = loaded.doc.members[index]
       if (member.leftAt) break
 
-      const hashes = [...(member.tokenHashes ?? []), tokenHash].slice(-4)
+      // Every sign-in mints a token; the old ones still belong to a device that
+      // may be in active use, so keep a long history. Pruning to the last four
+      // locked people out of their own groups after a handful of sign-ins.
+      const hashes = [...new Set([...(member.tokenHashes ?? []), tokenHash])].slice(-64)
       loaded.doc.members[index] = {
         ...member,
         name: user.name,
@@ -537,6 +540,20 @@ async function loginAccount(request: Request, env: Env): Promise<Response> {
 
   const memberships = await membershipsForUser(env, user)
   return json({ token, user: publicUser(user), memberships })
+}
+
+/**
+ * Re-mint the group tokens for the signed-in account.
+ *
+ * A phone whose stored token was pruned by an older build (or whose storage was
+ * cleared) still holds a valid account token, so it can heal itself instead of
+ * being told it is "not a member" of groups it plainly belongs to.
+ */
+async function refreshSession(request: Request, env: Env): Promise<Response> {
+  const user = await authenticateUser(request, env)
+  if (!user) throw new HttpError('Your sign-in expired. Sign in again.', 401)
+  const memberships = await membershipsForUser(env, user)
+  return json({ user: publicUser(user), memberships })
 }
 
 async function logoutAccount(request: Request, env: Env): Promise<Response> {
@@ -1330,6 +1347,9 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
     return releaseManifest(env, url)
   }
 
+  if (parts[1] === 'auth' && parts[2] === 'session' && method === 'GET') {
+    return refreshSession(request, env)
+  }
   if (parts[1] === 'auth' && parts.length === 3 && method === 'POST') {
     if (parts[2] === 'register') return registerAccount(request, env)
     if (parts[2] === 'login') return loginAccount(request, env)

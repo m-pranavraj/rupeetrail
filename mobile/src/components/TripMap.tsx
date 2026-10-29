@@ -22,6 +22,15 @@ export interface MapHere {
 const TILE = 256
 const MAX_ZOOM = 16
 const MIN_ZOOM = 3
+
+/**
+ * Both Esri basemaps stop at z16; one shows street labels, the other is a
+ * label-free dark canvas that matches the app's night theme.
+ */
+const TILE_SOURCE = {
+  light: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile',
+  dark: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile',
+} as const
 /** India, so the map always has a sensible view even with no permission. */
 const HOME: MapHere = { lat: 21.1458, lng: 79.0882 }
 
@@ -41,9 +50,10 @@ function latToY(lat: number, zoom: number): number {
  * A dependency-free slippy map.
  *
  * Native map SDKs need a Google key and a Play Services binary; a trip ledger
- * only needs to show "where the money went". This renders CARTO raster tiles
- * (OpenStreetMap data, no key) and positions pins in world pixel space, so the
- * map works in any prebuild with no native module at all.
+ * only needs to show "where the money went". This renders Esri's public raster
+ * tiles — the only widely used basemap that still needs no key — and positions
+ * pins in world pixel space, so the map works in any prebuild with no native
+ * module at all.
  *
  * The map is always visible: with no pins it centres on the phone's location
  * (or India), so "tag a place" never leaves the user staring at an empty card.
@@ -104,7 +114,8 @@ export function TripMap({
       if (w <= usableWidth * 0.78 && h <= usableHeight * 0.7) break
     }
 
-    const zoom = clamp(fit + zoomStep, MIN_ZOOM, 17)
+    // 16 is the deepest level both Esri basemaps serve.
+    const zoom = clamp(fit + zoomStep, MIN_ZOOM, 16)
     const centerLat = (minLat + maxLat) / 2
     const centerLng = (minLng + maxLng) / 2
     const centerX = lonToX(centerLng, zoom)
@@ -117,7 +128,7 @@ export function TripMap({
     const firstY = Math.floor(top / TILE)
     const lastY = Math.floor((top + usableHeight) / TILE)
     const max = 2 ** zoom - 1
-    const style = isDark ? 'dark_all' : 'light_all'
+    const source = isDark ? TILE_SOURCE.dark : TILE_SOURCE.light
 
     const tiles: { key: string; uri: string; x: number; y: number }[] = []
     for (let x = firstX; x <= lastX; x += 1) {
@@ -126,7 +137,8 @@ export function TripMap({
         const wrapped = ((x % (max + 1)) + (max + 1)) % (max + 1)
         tiles.push({
           key: `${zoom}-${x}-${y}`,
-          uri: `https://basemaps.cartocdn.com/${style}/${zoom}/${wrapped}/${y}@2x.png`,
+          // Esri orders the path z/y/x, unlike the usual slippy-map z/x/y.
+          uri: `${source}/${zoom}/${y}/${wrapped}`,
           x: x * TILE - left,
           y: y * TILE - top,
         })
@@ -222,7 +234,7 @@ export function TripMap({
             </View>
           ) : null}
 
-          <Text style={styles.attribution}>© OpenStreetMap · CARTO</Text>
+          <Text style={styles.attribution}>Tiles © Esri · HERE, Garmin, OSM</Text>
         </>
       )}
     </View>

@@ -172,24 +172,143 @@ const NUMBER_WORDS: Record<string, number> = {
   // deliberately omitted so "what do I owe" is not read as a number.
   ek: 1,
   teen: 3,
+  char: 4,
   chaar: 4,
   panch: 5,
   paanch: 5,
   chhe: 6,
+  chhah: 6,
   saat: 7,
   aath: 8,
+  nau: 9,
+  gyarah: 11,
+  barah: 12,
+  terah: 13,
+  chaudah: 14,
+  pandrah: 15,
+  solah: 16,
+  satrah: 17,
+  atharah: 18,
+  unnis: 19,
+  chalees: 40,
+  chalis: 40,
   pachas: 50,
   pachaas: 50,
-  sau: 100,
+  pachchaas: 50,
+  sath: 60,
+  sattar: 70,
+  assi: 80,
+  nabbe: 90,
 }
 
 const MULTIPLIERS: Record<string, number> = {
   hundred: 100,
+  sau: 100,
   thousand: 1_000,
   hazaar: 1_000,
   hajar: 1_000,
   lakh: 100_000,
   lakhs: 100_000,
+}
+
+const UNIT_VALUES: Record<string, number> = {
+  sau: 100,
+  hundred: 100,
+  hazaar: 1_000,
+  hajar: 1_000,
+  thousand: 1_000,
+  lakh: 100_000,
+  lakhs: 100_000,
+}
+
+const HINDI_TENS: Record<string, number> = {
+  pachas: 50,
+  pachaas: 50,
+  pachchaas: 50,
+  chalees: 40,
+  chalis: 40,
+  sattar: 70,
+  assi: 80,
+  nabbe: 90,
+}
+
+const HINDI_FRACTIONS: Record<string, number> = {
+  dedh: 1.5,
+  dhai: 2.5,
+  dhaai: 2.5,
+  sava: 1.25,
+  savaa: 1.25,
+  paune: 0.75,
+  pauna: 0.75,
+}
+
+const HINDI_COUNTS: Record<string, number> = {
+  ek: 1,
+  do: 2,
+  teen: 3,
+  char: 4,
+  chaar: 4,
+  panch: 5,
+  paanch: 5,
+  chhe: 6,
+  chhah: 6,
+  saat: 7,
+  aath: 8,
+  nau: 9,
+}
+
+/**
+ * "dedh sau" → 150, "dhai hazaar" → 2500, "sava sau" → 125,
+ * "paune do sau" → 175. Hindi prices lean on quarters, so they are folded
+ * before the number-word pass, which only understands whole numbers.
+ */
+function foldHindiFractions(text: string): string {
+  const fraction = Object.keys(HINDI_FRACTIONS).join('|')
+  const unit = Object.keys(UNIT_VALUES).join('|')
+  const count = `\\d{1,3}|${Object.keys(HINDI_COUNTS).join('|')}`
+  const withCount = new RegExp(`\\b(paune|pauna|sava|savaa)\\s+(${count})\\s+(${unit})\\b`, 'gi')
+  const bare = new RegExp(`\\b(${fraction})\\s+(${unit})\\b`, 'gi')
+  return text
+    .replace(withCount, (_match, word: string, amount: string, measure: string) => {
+      const base = /^\d+$/.test(amount)
+        ? parseInt(amount, 10)
+        : HINDI_COUNTS[amount.toLowerCase()]
+      const offset = HINDI_FRACTIONS[word.toLowerCase()] > 1 ? 0.25 : -0.25
+      return String(Math.round((base + offset) * UNIT_VALUES[measure.toLowerCase()]))
+    })
+    .replace(bare, (_match, word: string, measure: string) =>
+      String(Math.round(HINDI_FRACTIONS[word.toLowerCase()] * UNIT_VALUES[measure.toLowerCase()])),
+    )
+}
+
+/** "2 sau pachas" → 250, "1.5 hazaar" → 1500, "2 lakh" → 200000. */
+function foldDigitMultipliers(text: string): string {
+  return text.replace(
+    /\b(\d{1,4}(?:\.\d{1,2})?)\s*(sau|hundred|hazaar|hajar|thousand|lakh|lakhs)\s*(pachas|pachaas|pachchaas|chalees|chalis|sattar|assi|nabbe)?\b/gi,
+    (_match, count: string, measure: string, tail: string | undefined) => {
+      const value = parseFloat(count) * UNIT_VALUES[measure.toLowerCase()]
+      return String(Math.round(value + (tail ? HINDI_TENS[tail.toLowerCase()] : 0)))
+    },
+  )
+}
+
+const MONEY_VERB_WINDOW = 28
+
+/**
+ * A trailing Hinglish verb is only a payment verb next to an amount:
+ * "500 diya" → "500 paid", while a member called Diya survives untouched.
+ */
+function replaceMoneyVerb(
+  text: string,
+  pattern: RegExp,
+  word: string,
+  fallback: 'keep' | 'drop' = 'keep',
+): string {
+  return text.replace(pattern, (match: string, offset: number, whole: string) => {
+    const before = whole.slice(Math.max(0, offset - MONEY_VERB_WINDOW), offset)
+    if (/\d/.test(before)) return ` ${word} `
+    return fallback === 'keep' ? match : ' '
+  })
 }
 
 /**
@@ -273,11 +392,16 @@ export function foldNumberWords(text: string): string {
  */
 export function prepareTranscript(raw: string): string {
   let text = ` ${raw.replace(/\s+/g, ' ').trim()} `
+  text = foldHindiFractions(text)
   text = text
     // Hindi "do" (two) is ambiguous in English, so it is only folded next to a
     // multiplier or "sau": "do sau" → 200, while "what do I owe" is untouched.
+    .replace(/\bdo\s+sau\s+(?:pachas|pachaas|pachchaas)\b/gi, '250')
+    .replace(/\bdo\s+(?:hazaar|hajar)\s+pachas\b/gi, '2050')
     .replace(/\bdo\s+sau\b/gi, '200')
     .replace(/\bdo\s+(hazaar|hajar|thousand)\b/gi, '2000')
+  text = foldNumberWords(foldDigitMultipliers(text))
+  text = text
     .replace(/\b(?:maine|humne)\b/gi, (match) => (/hum/i.test(match) ? ' we ' : ' i '))
     // "main" is only "I" when a payment verb follows — "main course" is food.
     .replace(
@@ -285,14 +409,34 @@ export function prepareTranscript(raw: string): string {
       '$1i',
     )
     .replace(/\b([a-z][a-z'-]+)\s+ne\b/gi, '$1 paid')
-    .replace(/\b(?:diya|diye|di|bhara|bhar diya|pay kiya|kiya|karta|karti|kharcha|kharch)\b/gi, ' ')
-    .replace(/\b(?:ke liye|liye|ke waste)\b/gi, ' for ')
+    // Dative and ablative markers carry the direction of a payment:
+    // "Priya ko 500 diye" → "to Priya … paid", "Priya se 500 mila" → "from Priya … received".
+    .replace(/\b([a-z][a-z'-]+)\s+ko\b/gi, 'to $1')
+    .replace(/\b([a-z][a-z'-]+)\s+se\b/gi, 'from $1')
+    .replace(/\b(?:mujhe|mujhko|mujko|meko)\b/gi, ' me ')
+    .replace(/\b(?:bheja|bheje|bheji|bhej diya|bhej diye|bhej di)\b/gi, ' sent ')
+    // "Priya ke liye" → "for Priya" before the verb pass, so the lone "liye"
+    // in "sab ke liye" is not mistaken for "took money".
+    .replace(/\b(?:sabke|sabki|sabka)\s+liye\b/gi, ' for everyone ')
+    .replace(/\b([a-z][a-z'-]+)\s+ke\s+(?:liye|waste)\b/gi, 'for $1')
+    .replace(/\b(?:ke liye|ke waste)\b/gi, ' for ')
+  text = replaceMoneyVerb(
+    text,
+    /\b(?:de diya|de diye|de di|bhar diya|chuka diya|chuka diye|diya|diye|di|bhara|kiya|chukaya|chukaye)\b/gi,
+    'paid',
+  )
+  text = replaceMoneyVerb(text, /\b(?:mila|mili|mile|aaya|aayi|aaye)\b/gi, 'received')
+  text = replaceMoneyVerb(text, /\b(?:liya|liye|li)\b/gi, 'received')
+  text = text
+    .replace(/\b(?:ka|ki|ke)\b/gi, ' ')
+    .replace(/\bliye\b/gi, ' for ')
+    .replace(/\b(?:karta|karti|kharcha|kharch|kiya)\b/gi, ' ')
     .replace(/\b(?:rupaye|rupay|rupaiya|paise|paisa)\b/gi, ' rupees ')
     .replace(/\b(?:wala|wali|wale)\b/gi, ' ')
     .replace(/\b(?:hum sab|sab log|sabne|sabhi|sab)\b/gi, ' everyone ')
     .replace(/\s+/g, ' ')
     .trim()
-  return foldNumberWords(text)
+  return text
 }
 
 /** "pani puri" → "Pani Puri", preserving already-capitalised words. */
@@ -500,10 +644,21 @@ const STOP_NAMES = new Set([
   'them',
   'him',
   'her',
+  'everyone',
+  'everybody',
+  'all',
+  'us',
+  'we',
+  'group',
+  'trip',
+  'rest',
+  'paid',
+  'sent',
 ])
 
 function captureName(text: string, members: Member[]): string | null {
   const patterns = [
+    /\b([A-Za-z][A-Za-z'-]{1,24})\s+(?:paid|sent|gave|transferred)\s+me\b/i,
     /\b(?:from|by)\s+([A-Za-z][A-Za-z'-]{1,24})/i,
     /\b(?:paid|sent|gave|transferred)\s+(?:me\s+)?(?:to\s+)?([A-Za-z][A-Za-z'-]{1,24})/i,
     /\bto\s+([A-Za-z][A-Za-z'-]{1,24})/i,
@@ -694,7 +849,7 @@ export function parseVoiceCommand(
   }
 
   // ---- Balances ---------------------------------------------------------
-  if (/\b(balance|balances|who\s*owes|what\s*(?:do|i)\s*(?:owe|get|have)|settled\s*up|square|position)\b/.test(lower)) {
+  if (/\b(balance|balances|who\s*owes|what\s*(?:do\s+)?(?:i\s+)?(?:owe|get|have)|settled\s*up|square|position|kitna|kitne|baki|baaki|hisaab|hisab)\b/.test(lower)) {
     const target = groupId ?? groups[0]?.id
     if (!target) return { ok: false, reply: 'Open a group first, then I can show the balances.' }
     return {
@@ -765,6 +920,9 @@ function extractPayer(
   for (const hit of text.matchAll(/[A-Za-z][A-Za-z'’-]*/g)) {
     const member = findMember(hit[0], members)
     if (!member) continue
+    const before = text.slice(0, hit.index ?? 0)
+    // A name introduced by "for"/"to" is a beneficiary, not the payer.
+    if (/\b(?:for|to)\s*$/i.test(before)) continue
     const rest = text.slice((hit.index ?? 0) + hit[0].length)
     if (new RegExp(`^[^,.;]{0,18}\\b${PAY_VERB}\\b`, 'i').test(rest)) {
       return { id: member.id, name: member.name, explicit: true }
@@ -1102,14 +1260,21 @@ function parseSettlement(
   const paidMe = /\b(?:paid|sent|gave|transferred)\s+me\b/.test(lower)
   const settled = /\b(?:settled|settlement|settle\s+up)\b/.test(lower)
   const iPaid =
-    /\b(?:i|me)\b[^.]{0,24}\b(?:paid|sent|gave|transferred)\b/.test(lower) ||
+    /\b(?:i|me|we)\b[^.]{0,40}\b(?:paid|sent|gave|transferred)\b/.test(lower) ||
     /^(?:paid|sent|gave|transferred)\b/.test(lower)
+  // "I paid 500 for Priya" is an expense on Priya's behalf, not a transfer.
+  const forSomeone = members.some((member) => {
+    const first = firstName(member.name)
+    if (first.length < 2) return false
+    const names = `${escapeRegex(member.name)}|${escapeRegex(first)}`
+    return new RegExp(`\\bfor\\s+(?:${names})\\b`, 'i').test(lower)
+  })
   const explicitName = captureName(t, members)
   const intent =
     received ||
     paidMe ||
     (settled && (mentionsMember || explicitName !== null)) ||
-    (iPaid && (mentionsMember || explicitName !== null))
+    (iPaid && !forSomeone && (mentionsMember || explicitName !== null))
 
   if (!intent) return null
   if (!context.currentGroupId) {
@@ -1203,6 +1368,8 @@ export function commandHelp(): string {
     'GST + groups: "Bill 1256, GST 60, 2 ate for 500, 3 split the rest"',
     'Count split: "5 people, 2 ate 250 each, 3 ate the rest"',
     'Record payment: "I got 500 rupees from Priya" or "I paid Priya 800"',
+    'Hinglish: "Maine Priya ko 500 diye" or "Priya se 500 mila"',
+    'Hinglish: "Humne dinner ke liye dedh sau diya, sab ke liye"',
     'Confirm payment: "Confirm I received 500"',
     'Delete: "Delete the last expense" or "Remove that bill"',
     'Edit: "Edit the amount to 1200"',

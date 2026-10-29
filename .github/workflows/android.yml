@@ -140,12 +140,18 @@ jobs:
           }
           NODE
 
+      # Metro inlines EXPO_PUBLIC_* when it bundles during assembleRelease, so
+      # these must be present here too — not just on the prebuild step. Without
+      # them the app thinks it is version 1 and nags to install its own build.
       - name: Build release APKs
         working-directory: mobile/android
         env:
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          EXPO_PUBLIC_API_BASE: https://rupeetrail-api.mogantipranavraj.workers.dev
+          EXPO_PUBLIC_VERSION_CODE: ${{ steps.version.outputs.code }}
+          EXPO_PUBLIC_VERSION_NAME: ${{ steps.version.outputs.name }}
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Verify the APKs
@@ -163,6 +169,14 @@ jobs:
           BUILD_TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           "$BUILD_TOOLS/apksigner" verify --print-certs "$ARM64" | head -5
           "$BUILD_TOOLS/aapt" dump badging "$ARM64" | grep -E "package:|application-label:|native-code:" | head -4
+          # The updater compares the bundle's copy of the version with the
+          # manifest; a bundle built without the env vars would claim version 1
+          # and keep offering this very APK forever. Fail the release instead.
+          unzip -p "$ARM64" assets/index.android.bundle > /tmp/rupeesplit-bundle.js
+          test -s /tmp/rupeesplit-bundle.js
+          grep -q "${{ steps.version.outputs.name }}" /tmp/rupeesplit-bundle.js
+          grep -q "rupeetrail-api.mogantipranavraj.workers.dev" /tmp/rupeesplit-bundle.js
+          echo "Bundle carries ${{ steps.version.outputs.name }} and the production API"
 
       - name: Publish the stable release
         env:

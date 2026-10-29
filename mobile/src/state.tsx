@@ -75,6 +75,8 @@ export function useStore(): Store {
   return store
 }
 
+const isAuthFailure = (cause: unknown) => cause instanceof api.ApiError && cause.status === 401
+
 function membershipFor(snapshot: GroupSnapshot, token: string, joinedAt = Date.now()): AuthMembership {
   return {
     groupId: snapshot.group.id,
@@ -148,6 +150,43 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     if (!current) throw new api.ApiError('Sign in again to continue.', 401)
     return current
   }, [])
+
+  const healing = useRef<Promise<boolean> | null>(null)
+
+  /**
+   * Swap in fresh group tokens when the stored one has been retired.
+   *
+   * The account token still proves who this is, so a device that lost its group
+   * token heals itself instead of showing "not a member" for its own trips.
+   * Concurrent callers share one refresh.
+   */
+  const healMemberships = useCallback(async (): Promise<boolean> => {
+    const current = sessionRef.current
+    if (!current) return false
+    if (!healing.current) {
+      healing.current = (async () => {
+        try {
+          const fresh = await api.refreshSession(current.token)
+          applySession({ ...current, user: fresh.user, memberships: fresh.memberships })
+          const open = activeRef.current
+          const replacement = open
+            ? fresh.memberships.find((entry) => entry.groupId === open.membership.groupId)
+            : undefined
+          if (open && replacement) {
+            activeRef.current = { ...open, membership: replacement }
+            setActive((prev) => (prev ? { ...prev, membership: replacement } : prev))
+          }
+          return true
+        } catch {
+          return false
+        } finally {
+          healing.current = null
+        }
+      })()
+    }
+    return healing.current
+  }, [applySession])
+
 
   /* ------------------------------------------------------------- accounts */
 
@@ -271,15 +310,25 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
 
   const openGroup = useCallback<Store['openGroup']>(async (groupId) => {
     const current = sessionRef.current
-    const membership = current?.memberships.find((entry) => entry.groupId === groupId)
-    if (!membership) {
+    const stored = current?.memberships.find((entry) => entry.groupId === groupId)
+    if (!stored) {
       setError('This phone does not have access to that group.')
       return
     }
+    let membership: AuthMembership = stored
     setBusy(true)
     setError(null)
     try {
-      const snapshot = await api.fetchGroup(groupId, membership)
+      let snapshot: GroupSnapshot
+      try {
+        snapshot = await api.fetchGroup(groupId, membership)
+      } catch (cause) {
+        if (!isAuthFailure(cause) || !(await healMemberships())) throw cause
+        const healed = sessionRef.current?.memberships.find((entry) => entry.groupId === groupId)
+        if (!healed) throw cause
+        membership = healed
+        snapshot = await api.fetchGroup(groupId, healed)
+      }
       setActive({ membership, snapshot, live: 'connecting' })
 
       socketRef.current?.close()
@@ -308,7 +357,7 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setBusy(false)
     }
-  }, [fail])
+  }, [fail, healMemberships])
 
   const closeGroup = useCallback(() => {
     socketRef.current?.close()
@@ -321,7 +370,15 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     if (!current || refreshing.current) return
     refreshing.current = true
     try {
-      const snapshot = await api.fetchGroup(current.membership.groupId, current.membership)
+      let snapshot: GroupSnapshot
+      try {
+        snapshot = await api.fetchGroup(current.membership.groupId, current.membership)
+      } catch (cause) {
+        if (!isAuthFailure(cause) || !(await healMemberships())) throw cause
+        const healed = activeRef.current?.membership
+        if (!healed) throw cause
+        snapshot = await api.fetchGroup(healed.groupId, healed)
+      }
       // A no-op sync must not re-render the whole ledger: on a big group that
       // reads as a stutter every few seconds.
       setActive((prev) =>
@@ -332,7 +389,7 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     } finally {
       refreshing.current = false
     }
-  }, [fail])
+  }, [fail, healMemberships])
 
   /** Run a mutation that answers with a fresh snapshot. */
   const mutate = useCallback(
@@ -342,7 +399,13 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
       setBusy(true)
       setError(null)
       try {
-        const snapshot = await work(current)
+        let snapshot: GroupSnapshot
+        try {
+          snapshot = await work(current)
+        } catch (cause) {
+          if (!isAuthFailure(cause) || !(await healMemberships()) || !activeRef.current) throw cause
+          snapshot = await work(activeRef.current)
+        }
         setActive((prev) => (prev ? { ...prev, snapshot } : prev))
         return true
       } catch (cause) {
@@ -351,7 +414,7 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
         setBusy(false)
       }
     },
-    [fail],
+    [fail, healMemberships],
   )
 
   const addExpense = useCallback<Store['addExpense']>(
@@ -361,7 +424,14 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
       setBusy(true)
       setError(null)
       try {
-        const snapshot = await api.addExpense(current.membership.groupId, current.membership, input)
+        let snapshot: Awaited<ReturnType<typeof api.addExpense>>
+        try {
+          snapshot = await api.addExpense(current.membership.groupId, current.membership, input)
+        } catch (cause) {
+          if (!isAuthFailure(cause) || !(await healMemberships()) || !activeRef.current) throw cause
+          const healed = activeRef.current.membership
+          snapshot = await api.addExpense(healed.groupId, healed, input)
+        }
         setActive((prev) => (prev ? { ...prev, snapshot } : prev))
         return snapshot.expenseId
       } catch (cause) {
@@ -371,7 +441,7 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
         setBusy(false)
       }
     },
-    [fail],
+    [fail, healMemberships],
   )
 
   const updateExpense = useCallback<Store['updateExpense']>(
@@ -442,12 +512,15 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
 
         // A manually named counterparty has no phone to confirm from, so the
         // side this device represents confirms immediately. The balance moves
-        // the moment the payment is recorded.
-        const created = [...snapshot.settlements]
-          .filter((entry) => entry.from === from && entry.to === to && entry.amountPaise === amountPaise)
-          .sort((a, b) => b.createdAt - a.createdAt)[0]
-        if (!created) return snapshot
-        return api.confirmSettlement(membership.groupId, membership, created.id, action)
+        // the moment the payment is recorded, so a failed confirmation must
+        // never make a recorded payment look like a failed one.
+        const createdId = snapshot.settlementId
+        if (!createdId) return snapshot
+        try {
+          return await api.confirmSettlement(membership.groupId, membership, createdId, action)
+        } catch {
+          return snapshot
+        }
       }),
     [mutate],
   )
