@@ -2,13 +2,14 @@
  * End-to-end smoke test against a locally running Worker.
  *
  *   npm run db:local
- *   npm run dev:realtime   (port 8788)
  *   npm run dev:api        (port 8787)
  *   node scripts/api-smoke.mjs
  *
  * It covers the flows the product actually promises: create a group, invite by
  * code, join from a second device, log a multi-payer expense, confirm it, settle
  * it from both sides, and receive the live broadcast over a real websocket.
+ * The realtime hub is a Durable Object inside the API worker, so no second
+ * process is needed.
  */
 import crypto from 'node:crypto'
 import net from 'node:net'

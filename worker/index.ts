@@ -12,7 +12,7 @@
  * other phone sees.
  */
 import { allocateSplit, SplitError } from '../src/lib/splits'
-import { createRealtimeTicket, publishRealtime } from '../freebuff-realtime/server.js'
+export { LedgerRealtime } from './realtime'
 import type {
   AckStatus,
   Expense,
@@ -549,14 +549,17 @@ async function logoutAccount(request: Request, env: Env): Promise<Response> {
 async function notify(env: Env, groupId: string, revision: number): Promise<void> {
   if (!env.REALTIME) return
   try {
-    await publishRealtime(env, {
-      room: roomFor(groupId),
-      event: 'ledger',
-      data: { revision },
-    })
+    const hub = env.REALTIME.get(env.REALTIME.idFromName('hub'))
+    await hub.fetch(
+      new Request('https://realtime/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: roomFor(groupId), revision }),
+      }),
+    )
   } catch {
-    // Realtime is best effort: clients also poll, so a publish failure must
-    // never fail the write the member actually made.
+    // Realtime is best effort: clients also sync on focus, so a publish failure
+    // must never fail the write the member actually made.
   }
 }
 
@@ -1266,14 +1269,20 @@ async function realtimeTicket(request: Request, env: Env): Promise<Response> {
   }
 
   try {
-    const ticket = await createRealtimeTicket(env, {
-      room,
-      userId: auth.me.id,
-      origin,
-      publish: false,
-      presence: true,
-    })
-    return json(ticket)
+    const hub = env.REALTIME.get(env.REALTIME.idFromName('hub'))
+    const minted = await hub.fetch(
+      new Request('https://realtime/mint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room }),
+      }),
+    )
+    if (!minted.ok) throw new Error('mint failed')
+    const { ticket } = (await minted.json()) as { ticket: string }
+    const socket = new URL('/api/realtime/ws', request.url)
+    socket.protocol = socket.protocol === 'https:' ? 'wss:' : 'ws:'
+    socket.searchParams.set('ticket', ticket)
+    return json({ websocketUrl: socket.href })
   } catch {
     return json({ error: 'Live updates are temporarily unavailable.' }, 503)
   }
@@ -1316,6 +1325,12 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
 
   if (parts[1] === 'realtime' && parts[2] === 'ticket' && method === 'POST') {
     return realtimeTicket(request, env)
+  }
+
+  if (parts[1] === 'realtime' && parts[2] === 'ws' && method === 'GET') {
+    if (!env.REALTIME) return new Response('Live updates are unavailable.', { status: 503 })
+    const hub = env.REALTIME.get(env.REALTIME.idFromName('hub'))
+    return hub.fetch(request)
   }
 
   if (parts[1] !== 'groups' || !parts[2]) return json({ error: 'Not found.' }, 404)
