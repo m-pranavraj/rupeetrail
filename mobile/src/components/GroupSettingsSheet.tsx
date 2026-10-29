@@ -29,11 +29,14 @@ export function GroupSettingsSheet({
   code,
   inviteLink,
   meId,
+  meName,
+  meUpi,
   appVersion,
   totalPaise,
   onClose,
   onRename,
   onStatus,
+  onUpdateMe,
   onAddPerson,
   onRemovePerson,
   onExport,
@@ -42,17 +45,23 @@ export function GroupSettingsSheet({
   code: string
   inviteLink: string
   meId: string
+  meName: string
+  meUpi?: string
   appVersion: string
   totalPaise: number
   onClose: () => void
   onRename: (name: string, emoji: string) => Promise<boolean>
   onStatus: (status: 'active' | 'closed') => Promise<boolean>
+  onUpdateMe: (patch: { name?: string; upiId?: string }) => Promise<boolean>
   onAddPerson: (name: string, upiId: string) => Promise<boolean>
   onRemovePerson: (memberId: string) => Promise<boolean>
   onExport: () => void
 }) {
   const [name, setName] = useState(group.name)
   const [emoji, setEmoji] = useState(group.emoji)
+  const [myName, setMyName] = useState(meName)
+  const [myUpi, setMyUpi] = useState(meUpi ?? '')
+  const [savingMe, setSavingMe] = useState(false)
   const [copied, setCopied] = useState<'code' | 'link' | null>(null)
   const [personName, setPersonName] = useState('')
   const [personUpi, setPersonUpi] = useState('')
@@ -99,6 +108,22 @@ export function GroupSettingsSheet({
     setSaving(false)
     if (!ok) setError('Could not rename the group. Try again.')
   }
+
+  const saveMe = async () => {
+    const nextName = myName.trim()
+    const nextUpi = myUpi.trim()
+    if (nextName.length < 1) {
+      setError('Your name cannot be empty.')
+      return
+    }
+    setSavingMe(true)
+    setError('')
+    const ok = await onUpdateMe({ name: nextName, upiId: nextUpi })
+    setSavingMe(false)
+    if (!ok) setError('Could not save your details. Check the UPI id and try again.')
+  }
+
+  const myDetailsChanged = myName.trim() !== meName || myUpi.trim() !== (meUpi ?? '')
 
   const toggleStatus = () => {
     Alert.alert(
@@ -169,6 +194,32 @@ export function GroupSettingsSheet({
       </Card>
 
       <Card>
+        <Label>You in this trip</Label>
+        <Field label="Your name" value={myName} onChangeText={setMyName} maxLength={40} />
+        <Field
+          label="Your UPI id"
+          value={myUpi}
+          onChangeText={setMyUpi}
+          placeholder="name@okhdfcbank"
+          autoCapitalize="none"
+          autoCorrect={false}
+          maxLength={100}
+          hint="So anyone in the group can pay you in one tap."
+        />
+        {myDetailsChanged ? (
+          <Button
+            label="Save my details"
+            compact
+            loading={savingMe}
+            disabled={!myName.trim()}
+            onPress={() => void saveMe()}
+          />
+        ) : (
+          <Muted small>{meUpi ? 'Your details are up to date.' : 'Add a UPI id to get paid in one tap.'}</Muted>
+        )}
+      </Card>
+
+      <Card>
         <View style={styles.statusRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.statusTitle}>{closed ? 'Trip closed' : 'Trip in progress'}</Text>
@@ -199,7 +250,13 @@ export function GroupSettingsSheet({
                 {member.name}
                 {member.id === meId ? '  (you)' : ''}
               </Text>
-              <Muted small>{member.isPlaceholder ? 'added by name · not joined yet' : 'joined'}</Muted>
+              <Muted small>
+                {member.isPlaceholder
+                  ? 'added by name · not joined yet'
+                  : member.upiId
+                    ? member.upiId
+                    : 'joined · no UPI id yet'}
+              </Muted>
             </View>
             {member.isPlaceholder ? (
               <PressableScale

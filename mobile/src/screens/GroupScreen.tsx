@@ -103,9 +103,11 @@ export function GroupScreen() {
     acknowledge,
     resolveDispute,
     patchGroup,
+    updateMe,
     addPerson,
     removePerson,
     settle,
+    confirmSettlement,
     tagPlace,
     clearPlace,
     openGroup,
@@ -128,6 +130,8 @@ export function GroupScreen() {
   const [payMethod, setPayMethod] = useState<'upi' | 'cash' | 'bank'>('upi')
   const [payingKey, setPayingKey] = useState<string | null>(null)
   const [submittingPay, setSubmittingPay] = useState(false)
+  const [paymentId, setPaymentId] = useState<string | null>(null)
+  const [payingSettlement, setPayingSettlement] = useState<'paid' | 'received' | 'dispute' | null>(null)
   const [expandedMember, setExpandedMember] = useState<string | null>(null)
   const [toast, setToast] = useState<{ message: string; tone: 'ok' | 'error' } | null>(null)
   const [here, setHere] = useState<{ lat: number; lng: number } | null>(null)
@@ -234,6 +238,7 @@ export function GroupScreen() {
 
   const detailExpense = detailId ? expenses.find((expense) => expense.id === detailId) ?? null : null
   const editingExpense = editingId ? expenses.find((expense) => expense.id === editingId) ?? null : null
+  const payment = paymentId ? settlements.find((entry) => entry.id === paymentId) ?? null : null
 
   const notify = (message: string, tone: 'ok' | 'error' = 'ok') => {
     setToast({ message, tone })
@@ -360,6 +365,22 @@ export function GroupScreen() {
       notify(ok ? 'Payment recorded — balances updated.' : 'Could not record that.', ok ? 'ok' : 'error')
     } finally {
       setPayingKey(null)
+    }
+  }
+
+  const actOnPayment = async (action: 'paid' | 'received' | 'dispute') => {
+    if (!payment || payingSettlement) return
+    setPayingSettlement(action)
+    try {
+      const ok = await confirmSettlement(payment.id, action)
+      if (ok) {
+        buzz()
+        notify(action === 'dispute' ? 'Disputed — balance reversed.' : 'Payment confirmed.')
+      } else {
+        notify('Could not update that payment.', 'error')
+      }
+    } finally {
+      setPayingSettlement(null)
     }
   }
 
@@ -774,7 +795,8 @@ export function GroupScreen() {
                 plan.transfers.map((transfer, index) => {
                   const to = activeMembers.find((member) => member.id === transfer.to)
                   const involvesMe = transfer.from === me.id || transfer.to === me.id
-                  const canUpi = Boolean(to?.upiId && isValidUpi(to.upiId))
+                  const canUpi =
+                    transfer.from === me.id && Boolean(to?.upiId && isValidUpi(to.upiId))
                   return (
                     <View
                       key={`${transfer.from}-${transfer.to}-${index}`}
@@ -825,7 +847,7 @@ export function GroupScreen() {
                   )
                 })
               )}
-              <Muted small>{plan.notes[0] ?? ''}</Muted>
+              {plan.notes[0] ? <Muted small>{plan.notes[0]}</Muted> : null}
             </Card>
 
             <Button
@@ -841,31 +863,46 @@ export function GroupScreen() {
                 {[...settlements]
                   .sort((a, b) => b.updatedAt - a.updatedAt)
                   .map((payment) => (
-                    <View key={payment.id} style={styles.paymentRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.transferWho} numberOfLines={1}>
-                          {nameOf(group, payment.from)} → {nameOf(group, payment.to)}
-                        </Text>
-                        <Text style={styles.personMeta}>
-                          {formatPaise(payment.amountPaise)} · {payment.method} ·{' '}
-                          {new Date(payment.updatedAt).toLocaleTimeString('en-IN', {
-                            hour: 'numeric',
-                            minute: '2-digit',
-                          })}
-                        </Text>
+                    <PressableScale
+                      key={payment.id}
+                      onPress={() => {
+                        tap()
+                        setPaymentId(payment.id)
+                      }}
+                      scaleTo={0.985}
+                    >
+                      <View style={styles.paymentRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.transferWho} numberOfLines={1}>
+                            {nameOf(group, payment.from)} → {nameOf(group, payment.to)}
+                          </Text>
+                          <Text style={styles.personMeta}>
+                            {formatPaise(payment.amountPaise)} · {payment.method} ·{' '}
+                            {new Date(payment.updatedAt).toLocaleTimeString('en-IN', {
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            })}
+                          </Text>
+                        </View>
+                        <Pill
+                          tone={
+                            payment.status === 'confirmed'
+                              ? 'ok'
+                              : payment.status === 'disputed'
+                                ? 'bad'
+                                : 'info'
+                          }
+                        >
+                          {payment.status === 'pending' ? 'recorded' : payment.status.replace(/_/g, ' ')}
+                        </Pill>
+                        <Ionicons
+                          name="chevron-forward"
+                          size={15}
+                          color={colors.mutedDim}
+                          style={{ marginLeft: spacing(1.5) }}
+                        />
                       </View>
-                      <Pill
-                        tone={
-                          payment.status === 'confirmed'
-                            ? 'ok'
-                            : payment.status === 'disputed'
-                              ? 'bad'
-                              : 'info'
-                        }
-                      >
-                        {payment.status === 'pending' ? 'recorded' : payment.status.replace(/_/g, ' ')}
-                      </Pill>
-                    </View>
+                    </PressableScale>
                   ))}
                 <Muted small>
                   Balances move the moment a payment is recorded. If money never actually moved, open the
@@ -1071,6 +1108,8 @@ export function GroupScreen() {
           code={snapshot.code}
           inviteLink={inviteLink}
           meId={me.id}
+          meName={me.name}
+          meUpi={me.upiId}
           appVersion={APP_LABEL}
           totalPaise={totalLogged}
           onClose={() => setSettingsOpen(false)}
@@ -1082,6 +1121,11 @@ export function GroupScreen() {
           onStatus={async (status) => {
             const ok = await patchGroup({ status })
             if (ok) notify(status === 'closed' ? 'Trip closed.' : 'Trip reopened.')
+            return ok
+          }}
+          onUpdateMe={async (patch) => {
+            const ok = await updateMe(patch)
+            if (ok) notify('Your details saved.')
             return ok
           }}
           onAddPerson={async (personName, upiId) => {
@@ -1211,6 +1255,96 @@ export function GroupScreen() {
               />
             </View>
           </View>
+        </Sheet>
+      ) : null}
+
+      {payment ? (
+        <Sheet
+          visible
+          title="Payment"
+          subtitle={`${nameOf(group, payment.from)} → ${nameOf(group, payment.to)}`}
+          onClose={() => setPaymentId(null)}
+          footer={<Button label="Done" variant="soft" onPress={() => setPaymentId(null)} />}
+        >
+          <View style={styles.paymentHero}>
+            <Text style={styles.paymentAmount}>{formatPaise(payment.amountPaise)}</Text>
+            <Text style={styles.paymentMeta}>
+              {payment.method.toUpperCase()} ·{' '}
+              {new Date(payment.createdAt).toLocaleString('en-IN', {
+                day: 'numeric',
+                month: 'short',
+                hour: 'numeric',
+                minute: '2-digit',
+              })}
+            </Text>
+          </View>
+
+          {payment.status === 'disputed' ? (
+            <Banner tone="error">
+              Disputed. This payment is left out of every balance until it is recorded again.
+            </Banner>
+          ) : payment.status === 'confirmed' ? (
+            <Banner tone="ok">Both sides confirmed this payment.</Banner>
+          ) : (
+            <Banner tone="info">
+              {payment.status === 'payer_confirmed'
+                ? 'The payer confirmed. Waiting for the receiver.'
+                : payment.status === 'receiver_confirmed'
+                  ? 'The receiver confirmed. Waiting for the payer.'
+                  : 'Balances already include this payment. Confirming just records that both sides agree.'}
+            </Banner>
+          )}
+
+          {(
+            [
+              { label: `${nameOf(group, payment.from)} paid`, at: payment.payerConfirmedAt },
+              { label: `${nameOf(group, payment.to)} received`, at: payment.receiverConfirmedAt },
+            ] as { label: string; at?: number }[]
+          ).map((row) => (
+            <View key={row.label} style={styles.confirmRow}>
+              <Ionicons
+                name={row.at ? 'checkmark-circle' : 'ellipse-outline'}
+                size={17}
+                color={row.at ? colors.accent : colors.mutedDim}
+              />
+              <Text style={styles.confirmText} numberOfLines={1}>
+                {row.label}
+              </Text>
+              <Text style={styles.confirmState}>{row.at ? 'confirmed' : 'not yet'}</Text>
+            </View>
+          ))}
+
+          {(() => {
+            const role: 'paid' | 'received' | null =
+              payment.from === me.id ? 'paid' : payment.to === me.id ? 'received' : null
+            if (!role) {
+              return (
+                <Muted small>Only the two people in this payment can confirm or question it.</Muted>
+              )
+            }
+            const mine =
+              role === 'paid' ? Boolean(payment.payerConfirmedAt) : Boolean(payment.receiverConfirmedAt)
+            if (payment.status === 'confirmed' || payment.status === 'disputed') return null
+            return (
+              <View style={{ gap: spacing(2), marginTop: spacing(2) }}>
+                {mine ? (
+                  <Muted small>You already confirmed this side.</Muted>
+                ) : (
+                  <Button
+                    label={role === 'paid' ? 'Yes, I paid this' : 'Yes, I received this'}
+                    loading={payingSettlement === role}
+                    onPress={() => void actOnPayment(role)}
+                  />
+                )}
+                <Button
+                  label="This didn't happen"
+                  variant="ghost"
+                  loading={payingSettlement === 'dispute'}
+                  onPress={() => void actOnPayment('dispute')}
+                />
+              </View>
+            )
+          })()}
         </Sheet>
       ) : null}
 
@@ -1377,6 +1511,19 @@ const styles = StyleSheet.create({
   },
   recordText: { color: colors.textSoft, fontSize: 10.5, fontWeight: '800' },
   paymentRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing(2.2), gap: spacing(2) },
+  paymentHero: { alignItems: 'center', paddingVertical: spacing(3) },
+  paymentAmount: { color: colors.text, fontSize: 34, fontWeight: '900', letterSpacing: -1.2 },
+  paymentMeta: { color: colors.muted, fontSize: 11.5, fontWeight: '600', marginTop: spacing(1) },
+  confirmRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing(2),
+    paddingVertical: spacing(2),
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSoft,
+  },
+  confirmText: { flex: 1, color: colors.textSoft, fontSize: 12.5, fontWeight: '600' },
+  confirmState: { color: colors.muted, fontSize: 10.5, fontWeight: '700' },
   payChips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(2), marginTop: spacing(2) },
   payChip: {
     paddingHorizontal: spacing(3),

@@ -888,44 +888,70 @@ async function removeMember(
 /**
  * The Android update manifest.
  *
- * Values come from Worker environment variables so publishing a build is a
- * config change, not a code change. With no URL configured the app simply never
- * sees an update, which is the correct behaviour before the first release.
+ * The release workflow uploads `version.json` beside the stable APK, so this
+ * endpoint always describes the build people can actually install. Worker
+ * variables remain the fallback for local dev or a repo without releases.
  */
-function releaseManifest(env: Env, url: URL): Response {
+interface ReleaseManifest {
+  versionCode?: number
+  versionName?: string
+  apkUrl?: string
+  sha256?: string
+  sizeBytes?: number
+  notes?: string
+  minSupportedCode?: number
+}
+
+const RELEASE_MANIFEST_URL =
+  'https://github.com/m-pranavraj/rupeetrail/releases/download/main/version.json'
+
+async function remoteReleaseManifest(): Promise<ReleaseManifest | null> {
+  try {
+    const response = await fetch(RELEASE_MANIFEST_URL, {
+      headers: { Accept: 'application/json' },
+      cf: { cacheEverything: true, cacheTtl: 300 },
+    } as unknown as RequestInit)
+    if (!response.ok) return null
+    return (await response.json()) as ReleaseManifest
+  } catch {
+    return null
+  }
+}
+
+function manifestResponse(parsed: ReleaseManifest, current: number): Response | null {
+  const versionCode = Number(parsed.versionCode ?? 0)
+  const minSupportedCode = Number(parsed.minSupportedCode ?? 1)
+  if (!versionCode || !parsed.apkUrl) return null
+  return json({
+    latest: {
+      versionCode,
+      versionName: parsed.versionName ?? String(versionCode),
+      apkUrl: parsed.apkUrl,
+      sha256: parsed.sha256,
+      sizeBytes: Number(parsed.sizeBytes ?? 0) || undefined,
+      notes: parsed.notes ?? '',
+      mandatory: current < minSupportedCode,
+      minSupportedCode,
+    },
+    updateRequired: versionCode > current || current < minSupportedCode,
+    minSupportedCode,
+  })
+}
+
+async function releaseManifest(env: Env, url: URL): Promise<Response> {
   const current = Number(url.searchParams.get('currentCode') ?? '0') || 0
+
+  const remote = await remoteReleaseManifest()
+  const fromRemote = remote ? manifestResponse(remote, current) : null
+  if (fromRemote) return fromRemote
 
   // A single JSON value keeps the whole manifest in one place (one secret or
   // one variable), while the individual names stay supported for local dev.
   if (env.ANDROID_RELEASE_JSON) {
     try {
-      const parsed = JSON.parse(env.ANDROID_RELEASE_JSON) as {
-        versionCode?: number
-        versionName?: string
-        apkUrl?: string
-        sha256?: string
-        sizeBytes?: number
-        notes?: string
-        minSupportedCode?: number
-      }
-      const versionCode = Number(parsed.versionCode ?? 0)
-      const minSupportedCode = Number(parsed.minSupportedCode ?? 1)
-      if (versionCode && parsed.apkUrl) {
-        return json({
-          latest: {
-            versionCode,
-            versionName: parsed.versionName ?? String(versionCode),
-            apkUrl: parsed.apkUrl,
-            sha256: parsed.sha256,
-            sizeBytes: parsed.sizeBytes,
-            notes: parsed.notes ?? '',
-            mandatory: current < minSupportedCode,
-            minSupportedCode,
-          },
-          updateRequired: versionCode > current || current < minSupportedCode,
-          minSupportedCode,
-        })
-      }
+      const parsed = JSON.parse(env.ANDROID_RELEASE_JSON) as ReleaseManifest
+      const fromJson = manifestResponse(parsed, current)
+      if (fromJson) return fromJson
     } catch {
       // A malformed manifest must not break the app: fall through to no update.
     }

@@ -183,6 +183,37 @@ jobs:
             "$OUT/app-arm32.apk.sha256#app-arm32.apk.sha256" \
             --clobber
 
+      # The API worker reads this file on /api/app/releases, so publishing the
+      # APK and its manifest is the whole release. It runs after the APK upload
+      # so the app never sees a manifest for a file that is not downloadable yet.
+      - name: Publish the update manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CODE: ${{ steps.version.outputs.code }}
+          NAME: ${{ steps.version.outputs.name }}
+        run: |
+          OUT=mobile/android/app/build/outputs/apk/release
+          APK_SHA=$(cut -d' ' -f1 "$OUT/app-release.apk.sha256")
+          APK_SIZE=$(stat -c%s "$OUT/app-release.apk")
+          export APK_SHA APK_SIZE
+          node - "$OUT/version.json" <<'NODE'
+          const fs = require('fs')
+          const manifest = {
+            versionCode: Number(process.env.CODE),
+            versionName: process.env.NAME,
+            apkUrl: 'https://github.com/m-pranavraj/rupeetrail/releases/download/main/app-release.apk',
+            sha256: process.env.APK_SHA,
+            sizeBytes: Number(process.env.APK_SIZE),
+            notes: `RupeeSplit ${process.env.NAME} — live balances, one-tap settlements and a faster ledger.`,
+            // Raise this only when old clients must stop working. A high value
+            // would trap anyone whose download fails behind a blocking screen.
+            minSupportedCode: 1,
+          }
+          fs.writeFileSync(process.argv[2], JSON.stringify(manifest, null, 2) + '\n')
+          console.log(JSON.stringify(manifest))
+          NODE
+          gh release upload main "$OUT/version.json#version.json" --clobber
+
       - name: Publish a versioned release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

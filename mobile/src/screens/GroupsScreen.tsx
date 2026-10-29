@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import {
   Banner,
+  BusyLine,
   Button,
   Card,
   EmptyState,
@@ -44,7 +45,8 @@ export function GroupsScreen() {
   }, [memberships, query])
 
   return (
-    <Screen>
+    <View style={{ flex: 1 }}>
+      <Screen>
       <FadeIn>
         <View style={styles.head}>
           <View style={{ flex: 1 }}>
@@ -250,7 +252,9 @@ export function GroupsScreen() {
           hint="You join with the name on your account, so nobody has to type it again."
         />
       </Sheet>
-    </Screen>
+      </Screen>
+      <BusyLine visible={busy} />
+    </View>
   )
 }
 

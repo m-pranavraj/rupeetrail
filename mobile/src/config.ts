@@ -5,7 +5,7 @@
  * source can point at the current backend, a Render deployment, or staging.
  * There is no local fallback: the app refuses to work without a server.
  */
-const FALLBACK_API_BASE = 'https://site-4cdae2a9f5c34eb7b0c6148416fe5552.freebuff.page'
+const FALLBACK_API_BASE = 'https://rupeetrail-api.mogantipranavraj.workers.dev'
 
 export const API_BASE = (process.env.EXPO_PUBLIC_API_BASE ?? FALLBACK_API_BASE).replace(/\/+$/, '')
 
