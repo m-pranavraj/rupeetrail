@@ -1674,6 +1674,9 @@ h3 {
 .payback-summary .is-pay strong {
   color: inherit;
 }
+.payback-summary .is-muted {
+  color: rgba(244, 239, 227, 0.5);
+}
 
 .payback-people {
   display: flex;
@@ -1746,31 +1749,43 @@ h3 {
   font-size: 11px;
 }
 
-.payback-person__net {
+.payback-person__amounts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   flex: 0 0 auto;
+  gap: 2px;
   margin-left: auto;
   text-align: right;
 }
 
-.payback-person__net strong {
-  display: block;
+.payback-person__amount {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.payback-person__amount strong {
   font-family: var(--font-display);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
-.payback-person__net span {
+.payback-person__amount span {
   color: rgba(244, 239, 227, 0.45);
-  font-size: 9.5px;
+  font-size: 9px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
-.payback-person__net.is-get strong {
+.payback-person__amount.is-get strong {
   color: #a9e3c2;
 }
-.payback-person__net.is-pay strong {
+.payback-person__amount.is-pay strong {
   color: #ffb3a0;
+}
+.payback-person__amount.is-even strong {
+  color: rgba(244, 239, 227, 0.4);
 }
 
 .payback-person__chev {
@@ -1855,6 +1870,21 @@ h3 {
   font-size: 13.5px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.payback-line__text small {
+  margin-left: 6px;
+  color: rgba(244, 239, 227, 0.42);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.payback-line-wrap--payment .payback-line {
+  color: rgba(244, 239, 227, 0.6);
+}
+
+.payback-line-wrap--payment .payback-line__amount {
+  color: rgba(244, 239, 227, 0.6) !important;
 }
 
 .payback-line__actions {

@@ -50,7 +50,6 @@ import { useStore } from '../state'
 import { API_BASE, APP_LABEL } from '../config'
 import { computeBalances, isReconciled, nameOf } from '../lib/balances'
 import { formatPaise, parseRupees } from '../lib/money'
-import { planSettlements } from '../lib/settlement'
 import { shareTripCsv } from '../lib/csv'
 import { currentPoint } from '../lib/geo'
 import { isValidUpi, upiPayLink } from '../lib/upi'
@@ -174,7 +173,6 @@ export function GroupScreen() {
     () => (group ? computeBalances({ group, expenses, settlements }) : []),
     [expenses, group, settlements],
   )
-  const plan = useMemo(() => planSettlements(balances), [balances])
   const mine = balances.find((balance) => balance.memberId === me?.id)
   const reconcile = useMemo(() => isReconciled(balances), [balances])
   const totalLogged = useMemo(
@@ -785,7 +783,8 @@ export function GroupScreen() {
         {tab === 'settle' ? (
           <FadeIn key="settle" offset={8}>
             <PaybackCard
-              transfers={plan.transfers}
+              expenses={expenses}
+              settlements={settlements}
               groupName={group.name}
               meId={me.id}
               nameOf={(id) => nameOf(group, id)}

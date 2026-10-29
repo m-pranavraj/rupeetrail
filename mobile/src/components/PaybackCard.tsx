@@ -1,10 +1,10 @@
 /**
- * "Who pays whom" — a person-by-person read of the settlement plan.
+ * "Who owes whom" — every shared expense, person by person.
  *
- * The plan itself is a flat list of transfers, which is precise but hard to act
- * on when you only care about your own corner of it. This card groups the same
- * transfers around each person, narrows them by amount band, and can capture the
- * visible card as an image so the plan can leave the app in a chat.
+ * Totals here are gross on purpose: each expense line is listed in full and
+ * recorded payments sit beside them without ever being subtracted. A partial
+ * payment must never make an expense look cheaper than it was. The visible card
+ * can also be captured as an image so it can leave the app in a chat.
  */
 import React, { useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, StyleSheet, Text, View, type ViewInstance } from 'react-native'
@@ -12,20 +12,28 @@ import { Ionicons } from '@expo/vector-icons'
 import * as Sharing from 'expo-sharing'
 import { captureRef, type CaptureOptions } from 'react-native-view-shot'
 import { Avatar, Card, Divider, Muted, PressableScale } from './ui'
-import { PAYBACK_FILTERS, buildPayback, type PaybackFilter, type PaybackPerson } from '../lib/payback'
+import {
+  PAYBACK_FILTERS,
+  buildPayback,
+  type PaybackFilter,
+  type PaybackLine,
+  type PaybackPerson,
+} from '../lib/payback'
 import { formatPaise } from '../lib/money'
+import { isValidUpi } from '../lib/upi'
 import { colors, radius, spacing, tints } from '../theme'
-import type { Transfer } from '../lib/types'
+import type { Expense, MemberId, Settlement, Transfer } from '../lib/types'
 
 export interface PaybackCardProps {
-  transfers: Transfer[]
+  expenses: Expense[]
+  settlements: Settlement[]
   groupName: string
-  meId: string
-  nameOf: (id: string) => string
-  colorOf: (id: string) => number
-  upiOf: (id: string) => string | undefined
+  meId: MemberId
+  nameOf: (id: MemberId) => string
+  colorOf: (id: MemberId) => number
+  upiOf: (id: MemberId) => string | undefined
   onRecord: (transfer: Transfer) => void
-  onPayUpi: (toId: string, amountPaise: number) => void
+  onPayUpi: (toId: MemberId, amountPaise: number) => void
   payingKey: string | null
   closed: boolean
   onNotify: (message: string, tone?: 'ok' | 'error') => void
@@ -33,14 +41,16 @@ export interface PaybackCardProps {
 
 type Direction = 'in' | 'out'
 
-const transferKey = (transfer: Transfer): string =>
-  `${transfer.from}-${transfer.to}-${transfer.amountPaise}`
+const formatDay = (timestamp: number): string =>
+  new Date(timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
 
 /** Counts that explain a person row without making the reader do arithmetic. */
 function countLine(person: PaybackPerson): string {
-  const parts: string[] = []
-  if (person.incoming.length > 0) parts.push(`${person.incoming.length} incoming`)
-  if (person.outgoing.length > 0) parts.push(`${person.outgoing.length} outgoing`)
+  const expenseIds = new Set([...person.theyOwe, ...person.youOwe].map((line) => line.expenseId))
+  const parts = [`${expenseIds.size} ${expenseIds.size === 1 ? 'expense' : 'expenses'}`]
+  if (person.payments.length > 0) {
+    parts.push(`${person.payments.length} ${person.payments.length === 1 ? 'payment' : 'payments'}`)
+  }
   return parts.join(' · ')
 }
 
@@ -61,7 +71,8 @@ const waitForLayout = () =>
   })
 
 export function PaybackCard({
-  transfers,
+  expenses,
+  settlements,
   groupName,
   meId,
   nameOf,
@@ -74,34 +85,29 @@ export function PaybackCard({
   onNotify,
 }: PaybackCardProps) {
   const [filter, setFilter] = useState<PaybackFilter>('all')
-  const [onlyMine, setOnlyMine] = useState(false)
   const [filterOpen, setFilterOpen] = useState(false)
   const [captureMode, setCaptureMode] = useState(false)
   const [sharing, setSharing] = useState(false)
-  // The current user's rows start open; every other person starts folded.
-  const [expanded, setExpanded] = useState<Set<string>>(
-    () => new Set(transfers.some((transfer) => transfer.from === meId || transfer.to === meId) ? [meId] : []),
-  )
+  const [shareNote, setShareNote] = useState('')
+  const [expanded, setExpanded] = useState<Set<MemberId>>(() => new Set())
   const cardRef = useRef<ViewInstance>(null)
   const sharingRef = useRef(false)
 
-  const activeFilter = PAYBACK_FILTERS.find((option) => option.id === filter) ?? PAYBACK_FILTERS[0]
   const view = useMemo(
-    () =>
-      buildPayback(transfers, {
-        filter,
-        onlyMember: onlyMine ? meId : null,
-        priorityMember: meId,
-      }),
-    [transfers, filter, onlyMine, meId],
+    () => buildPayback(expenses, settlements, { meId, filter }),
+    [expenses, settlements, meId, filter],
   )
-  const meLine = view.people.find((person) => person.memberId === meId)
-  const filterLine = `${onlyMine ? 'Only mine · ' : ''}${activeFilter.label}`
-  const hasTransfers = transfers.length > 0
-  const actionsBlocked = payingKey !== null || closed
-  const canShare = view.people.length > 0 && !sharing
 
-  const togglePerson = (memberId: string) => {
+  const activeFilter = PAYBACK_FILTERS.find((option) => option.id === filter) ?? PAYBACK_FILTERS[0]
+  const filterLabel = activeFilter.label
+  const peopleCount = view.people.length
+  const hasExpenses = expenses.some((expense) => !expense.deletedAt && expense.amountPaise > 0)
+  const filteredOut = hasExpenses && peopleCount === 0 && filter !== 'all'
+  const hasPayments = view.receivedPaise > 0 || view.sentPaise > 0
+  const actionsBlocked = payingKey !== null || closed
+  const canShare = peopleCount > 0 && !sharing
+
+  const togglePerson = (memberId: MemberId) => {
     setExpanded((previous) => {
       const next = new Set(previous)
       if (next.has(memberId)) next.delete(memberId)
@@ -112,15 +118,15 @@ export function PaybackCard({
 
   const resetFilters = () => {
     setFilter('all')
-    setOnlyMine(false)
     setFilterOpen(false)
   }
 
   const shareView = async () => {
-    if (sharingRef.current || view.people.length === 0) return
+    if (sharingRef.current || peopleCount === 0) return
     sharingRef.current = true
     setSharing(true)
     setFilterOpen(false)
+    setShareNote('')
     setCaptureMode(true)
     try {
       await waitForLayout()
@@ -134,67 +140,78 @@ export function PaybackCard({
       }
       await Sharing.shareAsync(uri, {
         mimeType: 'image/png',
-        dialogTitle: 'Share who pays whom',
+        dialogTitle: 'Share who owes whom',
       })
+      setShareNote('Shared.')
     } catch (error) {
       if (!isCancellation(error)) onNotify('Could not share that image. Try again.', 'error')
     } finally {
-      // Expanded is derived, so dropping capture mode restores the folded rows.
+      // Expanded is derived from captureMode, so leaving it restores folded rows.
       setCaptureMode(false)
       setSharing(false)
       sharingRef.current = false
+      setTimeout(() => setShareNote(''), 4_200)
     }
   }
 
-  const renderTransferRow = (transfer: Transfer, direction: Direction, isMe: boolean) => {
-    const key = transferKey(transfer)
-    const involvesMe = transfer.from === meId || transfer.to === meId
-    const canPayUpi = transfer.from === meId && Boolean(upiOf(transfer.to))
-    const sentence =
-      direction === 'in'
-        ? isMe
-          ? `${nameOf(transfer.from)} should pay you`
-          : `${nameOf(transfer.from)} should pay ${nameOf(transfer.to)}`
-        : isMe
-          ? `You should pay ${nameOf(transfer.to)}`
-          : `${nameOf(transfer.from)} should pay ${nameOf(transfer.to)}`
+  const renderLine = (
+    line: PaybackLine,
+    person: PaybackPerson,
+    direction: Direction,
+    index: number,
+  ) => {
+    const displayName = nameOf(person.memberId)
+    const from = direction === 'in' ? person.memberId : meId
+    const to = direction === 'in' ? meId : person.memberId
+    const key = `${from}-${to}-${line.amountPaise}`
+    const upiId = upiOf(person.memberId)
+    const canPayUpi = direction === 'out' && Boolean(upiId) && isValidUpi(upiId ?? '')
 
     return (
-      <View key={key} style={styles.transferRow}>
-        <View style={styles.transferLeft}>
-          <Text style={styles.transferSentence}>{sentence}</Text>
-          {!captureMode && involvesMe ? (
-            <View style={styles.actions}>
-              {canPayUpi ? (
-                <PressableScale
-                  onPress={() => onPayUpi(transfer.to, transfer.amountPaise)}
-                  disabled={actionsBlocked}
-                  scaleTo={0.94}
-                  accessibilityLabel={`Pay ${nameOf(transfer.to)} via UPI`}
-                >
-                  <View style={[styles.action, styles.actionUpi]}>
-                    <Text style={styles.actionUpiText}>Pay UPI</Text>
-                  </View>
-                </PressableScale>
-              ) : null}
+      <View key={`${line.expenseId}-${index}`} style={styles.line}>
+        <View style={styles.lineTop}>
+          <View style={styles.lineText}>
+            <Text style={styles.lineTitle} numberOfLines={2}>
+              {line.description}
+            </Text>
+            <Text style={styles.lineDate}>{formatDay(line.date)}</Text>
+          </View>
+          <Text style={styles.lineAmount}>{formatPaise(line.amountPaise)}</Text>
+        </View>
+        {!captureMode && !closed ? (
+          <View style={styles.actions}>
+            {canPayUpi ? (
               <PressableScale
-                onPress={() => onRecord(transfer)}
+                onPress={() => onPayUpi(person.memberId, line.amountPaise)}
                 disabled={actionsBlocked}
                 scaleTo={0.94}
-                accessibilityLabel={`Record payment of ${formatPaise(transfer.amountPaise)}`}
+                accessibilityLabel={`Pay ${displayName} via UPI`}
               >
-                <View style={[styles.action, styles.actionRecord]}>
-                  {payingKey === key ? (
-                    <ActivityIndicator size="small" color={colors.accent} />
-                  ) : (
-                    <Text style={styles.actionRecordText}>Record</Text>
-                  )}
+                <View style={[styles.action, styles.actionUpi]}>
+                  <Text style={styles.actionUpiText}>Pay UPI</Text>
                 </View>
               </PressableScale>
-            </View>
-          ) : null}
-        </View>
-        <Text style={styles.transferAmount}>{formatPaise(transfer.amountPaise)}</Text>
+            ) : null}
+            <PressableScale
+              onPress={() => onRecord({ from, to, amountPaise: line.amountPaise })}
+              disabled={actionsBlocked}
+              scaleTo={0.94}
+              accessibilityLabel={`${
+                direction === 'in' ? 'Record received' : 'Record payment'
+              } of ${formatPaise(line.amountPaise)}`}
+            >
+              <View style={[styles.action, styles.actionRecord]}>
+                {payingKey === key ? (
+                  <ActivityIndicator size="small" color={colors.accent} />
+                ) : (
+                  <Text style={styles.actionRecordText}>
+                    {direction === 'in' ? 'Record received' : 'Record payment'}
+                  </Text>
+                )}
+              </View>
+            </PressableScale>
+          </View>
+        ) : null}
       </View>
     )
   }
@@ -208,14 +225,14 @@ export function PaybackCard({
       <Card style={[styles.card, captureMode && styles.cardCapture]}>
         <View style={styles.header}>
           <Text style={styles.title} numberOfLines={1}>
-            Who pays whom
+            Who owes whom
           </Text>
           {!captureMode ? (
             <PressableScale
               onPress={() => void shareView()}
               disabled={!canShare}
               scaleTo={0.92}
-              accessibilityLabel="Share who pays whom"
+              accessibilityLabel="Share who owes whom"
             >
               <View style={[styles.shareButton, sharing && styles.shareButtonBusy]}>
                 {sharing ? (
@@ -231,21 +248,25 @@ export function PaybackCard({
             </PressableScale>
           ) : null}
         </View>
+
+        <Text style={styles.subtitle}>
+          Every shared expense, person by person. Full totals include all expenses — payments are
+          listed separately and never subtracted.
+        </Text>
+
         {captureMode ? (
           <View style={styles.captureFilter}>
             <Ionicons name="funnel-outline" size={11} color={colors.accent} />
-            <Text style={styles.captureFilterText}>{filterLine}</Text>
+            <Text style={styles.captureFilterText}>
+              {filterLabel} · {peopleCount} {peopleCount === 1 ? 'person' : 'people'}
+            </Text>
           </View>
         ) : (
-          <Text style={styles.hint}>Tap a person to see who pays them and whom they pay.</Text>
-        )}
-
-        {hasTransfers && !captureMode ? (
           <View style={styles.controls}>
             <PressableScale
               onPress={() => setFilterOpen((previous) => !previous)}
               scaleTo={0.96}
-              accessibilityLabel="Filter by amount"
+              accessibilityLabel="Filter expenses by share amount"
             >
               <View style={[styles.chip, filterOpen && styles.chipOpen]}>
                 <Ionicons
@@ -254,7 +275,7 @@ export function PaybackCard({
                   color={filter === 'all' ? colors.mutedDim : colors.accent}
                 />
                 <Text style={[styles.chipText, filter !== 'all' && styles.chipTextActive]}>
-                  {activeFilter.label}
+                  {filterLabel}
                 </Text>
                 <Ionicons
                   name={filterOpen ? 'chevron-up' : 'chevron-down'}
@@ -263,22 +284,8 @@ export function PaybackCard({
                 />
               </View>
             </PressableScale>
-            <PressableScale
-              onPress={() => setOnlyMine((previous) => !previous)}
-              scaleTo={0.96}
-              accessibilityLabel="Only show my transfers"
-            >
-              <View style={[styles.chip, onlyMine && styles.chipActive]}>
-                <Ionicons
-                  name={onlyMine ? 'checkmark' : 'person-outline'}
-                  size={12}
-                  color={onlyMine ? colors.accent : colors.mutedDim}
-                />
-                <Text style={[styles.chipText, onlyMine && styles.chipTextActive]}>Only mine</Text>
-              </View>
-            </PressableScale>
           </View>
-        ) : null}
+        )}
 
         {filterOpen && !captureMode ? (
           <View style={styles.dropdown}>
@@ -306,142 +313,195 @@ export function PaybackCard({
           </View>
         ) : null}
 
-        {view.people.length > 0 ? (
-          <View style={styles.summary}>
-            <Text style={styles.summaryMain}>
-              <Text style={styles.summaryAmount}>{formatPaise(view.totalPaise)}</Text>
-              {' moving · '}
-              {view.transfers.length} {view.transfers.length === 1 ? 'transfer' : 'transfers'}
+        {shareNote && !captureMode ? <Muted small>{shareNote}</Muted> : null}
+
+        {peopleCount === 0 ? (
+          <View style={styles.empty}>
+            <Ionicons
+              name={filteredOut ? 'funnel-outline' : 'receipt-outline'}
+              size={22}
+              color={colors.mutedDim}
+            />
+            <Text style={styles.emptyTitle}>
+              {filteredOut ? 'No expense shares match this filter.' : 'No shared expenses yet.'}
             </Text>
-            {meLine ? (
-              <Text style={styles.summaryMe}>
-                {meLine.incomingPaise > 0 ? (
-                  <Text style={{ color: colors.accent }}>
-                    You receive {formatPaise(meLine.incomingPaise)}
-                  </Text>
-                ) : null}
-                {meLine.incomingPaise > 0 && meLine.outgoingPaise > 0 ? (
-                  <Text style={{ color: colors.mutedDim }}>{'  ·  '}</Text>
-                ) : null}
-                {meLine.outgoingPaise > 0 ? (
-                  <Text style={{ color: colors.coral }}>
-                    You pay {formatPaise(meLine.outgoingPaise)}
-                  </Text>
-                ) : null}
-                {meLine.incomingPaise === 0 && meLine.outgoingPaise === 0 ? (
-                  <Text style={{ color: colors.muted }}>You are even</Text>
-                ) : null}
-              </Text>
+            <Muted small>
+              {filteredOut
+                ? 'Try a wider amount band — every expense line shows up here, in full.'
+                : 'Log who paid for what and every person’s share appears here, expense by expense.'}
+            </Muted>
+            {filteredOut ? (
+              <PressableScale
+                onPress={resetFilters}
+                scaleTo={0.94}
+                accessibilityLabel="Show all amounts"
+              >
+                <View style={styles.resetButton}>
+                  <Text style={styles.resetText}>Show all amounts</Text>
+                </View>
+              </PressableScale>
             ) : null}
           </View>
-        ) : null}
-
-        {!hasTransfers ? (
-          <View style={styles.empty}>
-            <Text style={styles.emptyEmoji}>🤝</Text>
-            <Text style={styles.emptyTitle}>Everyone is settled</Text>
-            <Muted small>Nothing needs to move. The ledger is clean.</Muted>
-          </View>
-        ) : view.people.length === 0 ? (
-          <View style={styles.empty}>
-            <Ionicons name="funnel-outline" size={22} color={colors.mutedDim} />
-            <Text style={styles.emptyTitle}>No transfers match this filter</Text>
-            <Muted small>Try a wider amount band, or widen the scope.</Muted>
-            <PressableScale onPress={resetFilters} scaleTo={0.94} accessibilityLabel="Show all amounts">
-              <View style={styles.resetButton}>
-                <Text style={styles.resetText}>Show all amounts</Text>
-              </View>
-            </PressableScale>
-          </View>
         ) : (
-          <View style={styles.people}>
-            {view.people.map((person, index) => {
-              const isMe = person.memberId === meId
-              const name = nameOf(person.memberId)
-              const net = person.incomingPaise - person.outgoingPaise
-              const open = captureMode || expanded.has(person.memberId)
-              return (
-                <View key={person.memberId}>
-                  {index > 0 ? <View style={styles.rowRule} /> : null}
-                  <PressableScale
-                    onPress={captureMode ? undefined : () => togglePerson(person.memberId)}
-                    scaleTo={0.99}
-                    accessibilityLabel={`${name}, ${open ? 'hide' : 'show'} transfers`}
-                  >
-                    <View style={styles.personRow}>
-                      <Avatar name={name} color={colorOf(person.memberId)} size={34} />
-                      <View style={styles.personText}>
-                        <Text style={styles.personName} numberOfLines={1}>
-                          {name}
-                          {isMe ? ' · you' : ''}
-                        </Text>
-                        <Text style={styles.personMeta} numberOfLines={1}>
-                          {countLine(person)}
-                        </Text>
-                      </View>
-                      <Text
-                        style={[
-                          styles.personNet,
-                          {
-                            color:
-                              net > 0 ? colors.accent : net < 0 ? colors.coral : colors.muted,
-                          },
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {net > 0 ? `Gets ${formatPaise(net)}` : net < 0 ? `Pays ${formatPaise(-net)}` : 'Even'}
-                      </Text>
-                      {!captureMode ? (
-                        <Ionicons
-                          name={open ? 'chevron-up' : 'chevron-down'}
-                          size={14}
-                          color={colors.mutedDim}
-                        />
-                      ) : null}
-                    </View>
-                  </PressableScale>
-
-                  {open ? (
-                    <View style={styles.personBody}>
-                      {person.incoming.length > 0 ? (
-                        <View style={styles.section}>
-                          <Text style={styles.sectionLabel}>
-                            {isMe ? 'COMING TO YOU' : 'COMING IN'} ·{' '}
-                            {formatPaise(person.incomingPaise)}
-                          </Text>
-                          {person.incoming.map((transfer) =>
-                            renderTransferRow(transfer, 'in', isMe),
-                          )}
-                        </View>
-                      ) : null}
-                      {person.outgoing.length > 0 ? (
-                        <View style={styles.section}>
-                          <Text style={styles.sectionLabel}>
-                            GOING OUT · {formatPaise(person.outgoingPaise)}
-                          </Text>
-                          {person.outgoing.map((transfer) =>
-                            renderTransferRow(transfer, 'out', isMe),
-                          )}
-                        </View>
-                      ) : null}
-                    </View>
-                  ) : null}
+          <>
+            <View style={styles.summary}>
+              <View style={styles.summaryRow}>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryLabel}>You paid for others</Text>
+                  <Text style={[styles.summaryValue, { color: colors.accent }]}>
+                    {formatPaise(view.theyOwePaise)}
+                  </Text>
                 </View>
-              )
-            })}
-          </View>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryLabel}>Others paid for you</Text>
+                  <Text style={[styles.summaryValue, { color: colors.coral }]}>
+                    {formatPaise(view.youOwePaise)}
+                  </Text>
+                </View>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryLabel}>Expenses</Text>
+                  <Text style={styles.summaryValue}>{view.expenseCount}</Text>
+                </View>
+              </View>
+              {hasPayments ? (
+                <Text style={styles.summaryPayments}>
+                  {formatPaise(view.receivedPaise)} received · {formatPaise(view.sentPaise)} sent in
+                  payments (not deducted)
+                </Text>
+              ) : null}
+            </View>
+
+            <View style={styles.people}>
+              {view.people.map((person, index) => {
+                const name = nameOf(person.memberId)
+                const open = captureMode || expanded.has(person.memberId)
+                const even = person.theyOwePaise === 0 && person.youOwePaise === 0
+                return (
+                  <View key={person.memberId}>
+                    {index > 0 ? <View style={styles.rowRule} /> : null}
+                    <PressableScale
+                      onPress={captureMode ? undefined : () => togglePerson(person.memberId)}
+                      scaleTo={0.99}
+                      accessibilityLabel={`${name}, ${open ? 'hide' : 'show'} expenses`}
+                    >
+                      <View style={styles.personRow}>
+                        <Avatar name={name} color={colorOf(person.memberId)} size={34} />
+                        <View style={styles.personText}>
+                          <Text style={styles.personName} numberOfLines={1}>
+                            {name}
+                          </Text>
+                          <Text style={styles.personMeta} numberOfLines={1}>
+                            {countLine(person)}
+                          </Text>
+                        </View>
+                        <View style={styles.personAmounts}>
+                          {person.theyOwePaise > 0 ? (
+                            <View style={styles.amountStack}>
+                              <Text style={[styles.amountValue, { color: colors.accent }]}>
+                                {formatPaise(person.theyOwePaise)}
+                              </Text>
+                              <Text style={styles.amountLabel}>owes you</Text>
+                            </View>
+                          ) : null}
+                          {person.youOwePaise > 0 ? (
+                            <View style={styles.amountStack}>
+                              <Text style={[styles.amountValue, { color: colors.coral }]}>
+                                {formatPaise(person.youOwePaise)}
+                              </Text>
+                              <Text style={styles.amountLabel}>you owe</Text>
+                            </View>
+                          ) : null}
+                          {even ? (
+                            <View style={styles.amountStack}>
+                              <Text style={[styles.amountValue, { color: colors.muted }]}>—</Text>
+                              <Text style={styles.amountLabel}>payments only</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                        {!captureMode ? (
+                          <Ionicons
+                            name={open ? 'chevron-up' : 'chevron-down'}
+                            size={14}
+                            color={colors.mutedDim}
+                          />
+                        ) : null}
+                      </View>
+                    </PressableScale>
+
+                    {open ? (
+                      <View style={styles.personBody}>
+                        {person.theyOwe.length > 0 ? (
+                          <View style={styles.section}>
+                            <View style={styles.sectionHead}>
+                              <Text style={styles.sectionLabel}>They owe you</Text>
+                              <Text style={styles.sectionTotal}>
+                                {person.theyOwe.length} · {formatPaise(person.theyOwePaise)}
+                              </Text>
+                            </View>
+                            {person.theyOwe.map((line, lineIndex) =>
+                              renderLine(line, person, 'in', lineIndex),
+                            )}
+                          </View>
+                        ) : null}
+
+                        {person.youOwe.length > 0 ? (
+                          <View style={styles.section}>
+                            <View style={styles.sectionHead}>
+                              <Text style={styles.sectionLabel}>You owe them</Text>
+                              <Text style={styles.sectionTotal}>
+                                {person.youOwe.length} · {formatPaise(person.youOwePaise)}
+                              </Text>
+                            </View>
+                            {person.youOwe.map((line, lineIndex) =>
+                              renderLine(line, person, 'out', lineIndex),
+                            )}
+                          </View>
+                        ) : null}
+
+                        {person.payments.length > 0 ? (
+                          <View style={styles.section}>
+                            <View style={styles.sectionHead}>
+                              <Text style={styles.sectionLabel}>Payments between you</Text>
+                              <Text style={styles.sectionTotal}>not deducted</Text>
+                            </View>
+                            {person.payments.map((payment) => (
+                              <View key={payment.settlementId} style={styles.paymentLine}>
+                                <Text style={styles.paymentText} numberOfLines={2}>
+                                  {payment.direction === 'in'
+                                    ? `${name} paid you`
+                                    : `You paid ${name}`}{' '}
+                                  <Text style={styles.paymentAmount}>
+                                    {formatPaise(payment.amountPaise)}
+                                  </Text>
+                                  <Text style={styles.lineDate}>
+                                    {' · '}
+                                    {formatDay(payment.date)}
+                                  </Text>
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        ) : null}
+                      </View>
+                    ) : null}
+                  </View>
+                )
+              })}
+            </View>
+          </>
         )}
 
         <Divider />
-        <Text style={styles.fineprint}>
-          Calculated from confirmed balances. RupeeSplit never touches the money — record what
-          actually moved.
-        </Text>
         {captureMode ? (
           <Text style={styles.watermark} numberOfLines={1}>
-            RupeeSplit · {groupName} · {activeFilter.label}
+            RupeeSplit · {groupName} · {filterLabel}
           </Text>
-        ) : null}
+        ) : (
+          <Text style={styles.fineprint}>
+            Built from the actual expenses, not a netted settlement plan. Record payments when money
+            moves — the totals here always show what each expense cost.
+          </Text>
+        )}
       </Card>
     </View>
   )
@@ -456,12 +516,12 @@ const styles = StyleSheet.create({
 
   header: { flexDirection: 'row', alignItems: 'center', gap: spacing(3) },
   title: { flex: 1, color: colors.text, fontSize: 17, fontWeight: '800', letterSpacing: -0.3 },
-  hint: { color: colors.mutedDim, fontSize: 11.5, lineHeight: 16, marginTop: spacing(1) },
+  subtitle: { color: colors.mutedDim, fontSize: 11.5, lineHeight: 16, marginTop: spacing(1.5) },
   captureFilter: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing(1.5),
-    marginTop: spacing(1.5),
+    marginTop: spacing(2.5),
   },
   captureFilterText: { color: colors.accent, fontSize: 11, fontWeight: '800', letterSpacing: 0.4 },
   shareButton: {
@@ -481,7 +541,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: spacing(2),
-    marginTop: spacing(3.5),
+    marginTop: spacing(3),
   },
   chip: {
     flexDirection: 'row',
@@ -495,7 +555,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgElevated,
   },
   chipOpen: { borderColor: colors.border, backgroundColor: colors.surfaceAlt },
-  chipActive: { borderColor: tints.accent.border, backgroundColor: tints.accent.fill },
   chipText: { color: colors.muted, fontSize: 11.5, fontWeight: '700' },
   chipTextActive: { color: colors.accent },
 
@@ -527,11 +586,25 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgElevated,
     paddingHorizontal: spacing(3),
     paddingVertical: spacing(2.6),
-    gap: spacing(1),
+    gap: spacing(2),
   },
-  summaryMain: { color: colors.muted, fontSize: 11.5, fontWeight: '600' },
-  summaryAmount: { color: colors.text, fontSize: 13, fontWeight: '800' },
-  summaryMe: { fontSize: 11.5, fontWeight: '700' },
+  summaryRow: { flexDirection: 'row', gap: spacing(2) },
+  summaryItem: { flex: 1, minWidth: 0 },
+  summaryLabel: {
+    color: colors.mutedDim,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  summaryValue: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '800',
+    marginTop: 3,
+    fontVariant: ['tabular-nums'],
+  },
+  summaryPayments: { color: colors.muted, fontSize: 10.5, fontWeight: '600', lineHeight: 15 },
 
   people: { marginTop: spacing(1.5) },
   rowRule: { height: 1, backgroundColor: colors.borderSoft },
@@ -544,7 +617,17 @@ const styles = StyleSheet.create({
   personText: { flex: 1, minWidth: 0 },
   personName: { color: colors.text, fontSize: 13, fontWeight: '700' },
   personMeta: { color: colors.mutedDim, fontSize: 10.5, marginTop: 2 },
-  personNet: { fontSize: 11.5, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  personAmounts: { alignItems: 'flex-end', gap: spacing(1.5) },
+  amountStack: { alignItems: 'flex-end' },
+  amountValue: { fontSize: 12.5, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  amountLabel: {
+    color: colors.mutedDim,
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    marginTop: 1,
+    textTransform: 'uppercase',
+  },
 
   personBody: {
     marginTop: spacing(0.5),
@@ -558,22 +641,28 @@ const styles = StyleSheet.create({
     gap: spacing(2.5),
   },
   section: { gap: spacing(0.5) },
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing(2),
+    marginBottom: spacing(0.5),
+  },
   sectionLabel: {
     color: colors.mutedDim,
     fontSize: 9.5,
     fontWeight: '800',
     letterSpacing: 0.8,
-    marginBottom: spacing(0.5),
+    textTransform: 'uppercase',
   },
-  transferRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing(2),
-    paddingVertical: spacing(1.5),
-  },
-  transferLeft: { flex: 1 },
-  transferSentence: { color: colors.textSoft, fontSize: 11.5, lineHeight: 16, fontWeight: '600' },
-  transferAmount: {
+  sectionTotal: { color: colors.muted, fontSize: 10, fontWeight: '800' },
+
+  line: { paddingVertical: spacing(1.4) },
+  lineTop: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing(2) },
+  lineText: { flex: 1, minWidth: 0 },
+  lineTitle: { color: colors.textSoft, fontSize: 12, fontWeight: '600', lineHeight: 16 },
+  lineDate: { color: colors.mutedDim, fontSize: 10, marginTop: 2 },
+  lineAmount: {
     color: colors.text,
     fontSize: 12,
     fontWeight: '800',
@@ -594,17 +683,20 @@ const styles = StyleSheet.create({
   actionRecord: { backgroundColor: colors.surfaceHigh, borderColor: colors.border },
   actionRecordText: { color: colors.textSoft, fontSize: 10, fontWeight: '800' },
 
-  empty: { alignItems: 'center', paddingVertical: spacing(5), paddingHorizontal: spacing(2) },
-  emptyEmoji: { fontSize: 30 },
+  paymentLine: { paddingVertical: spacing(1.4) },
+  paymentText: { color: colors.textSoft, fontSize: 11.5, lineHeight: 16, fontWeight: '600' },
+  paymentAmount: { color: colors.text, fontSize: 11.5, fontWeight: '800' },
+
+  empty: { alignItems: 'center', paddingVertical: spacing(5), paddingHorizontal: spacing(2), gap: spacing(1) },
   emptyTitle: {
     color: colors.text,
-    fontSize: 14.5,
+    fontSize: 13.5,
     fontWeight: '800',
-    marginTop: spacing(2),
+    marginTop: spacing(1),
     textAlign: 'center',
   },
   resetButton: {
-    marginTop: spacing(3),
+    marginTop: spacing(2),
     paddingHorizontal: spacing(3.5),
     paddingVertical: spacing(2),
     borderRadius: radius.pill,
@@ -620,7 +712,6 @@ const styles = StyleSheet.create({
     fontSize: 9.5,
     fontWeight: '700',
     letterSpacing: 0.5,
-    marginTop: spacing(2),
     textAlign: 'center',
   },
 })

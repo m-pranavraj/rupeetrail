@@ -1,15 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import type { MemberId, Transfer } from '../types'
+import React, { useMemo, useRef, useState } from 'react'
+import type { Expense, MemberId, Settlement, Transfer } from '../types'
 import {
   buildPayback,
   PAYBACK_FILTERS,
   type PaybackFilter,
+  type PaybackLine,
   type PaybackPerson,
 } from '../lib/payback'
 import { formatPaise } from '../lib/money'
 import { isValidUpi, upiPayLink } from '../lib/upi'
 import { Avatar, StatusPill } from './ui'
-import { IconCheck, IconChevron, IconShare, IconUsers } from './Icons'
+import { IconChevron, IconShare, IconUsers } from './Icons'
 
 function slugify(value: string): string {
   return (
@@ -27,23 +28,26 @@ function downloadImage(dataUrl: string, filename: string) {
   link.click()
 }
 
-function activityLabel(person: PaybackPerson, isMe: boolean): string {
-  const incoming = person.incoming.length
-  const outgoing = person.outgoing.length
-  if (isMe) {
-    if (incoming && outgoing) return `${incoming} in · ${outgoing} out`
-    if (incoming) return `${incoming} ${incoming === 1 ? 'person pays' : 'people pay'} you`
-    if (outgoing) return `You pay ${outgoing} ${outgoing === 1 ? 'person' : 'people'}`
-    return 'Nothing to move'
+function formatDay(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+}
+
+function countLine(person: PaybackPerson): string {
+  const expenseIds = new Set(
+    [...person.theyOwe, ...person.youOwe].map((line) => line.expenseId),
+  )
+  const parts = [
+    `${expenseIds.size} ${expenseIds.size === 1 ? 'expense' : 'expenses'}`,
+  ]
+  if (person.payments.length > 0) {
+    parts.push(`${person.payments.length} ${person.payments.length === 1 ? 'payment' : 'payments'}`)
   }
-  if (incoming && outgoing) return `${incoming} in · ${outgoing} out`
-  if (incoming) return `${incoming} to receive`
-  if (outgoing) return `${outgoing} to pay`
-  return 'Settled'
+  return parts.join(' · ')
 }
 
 export function PaybackCard({
-  transfers,
+  expenses,
+  settlements,
   groupName,
   currentMemberId,
   nameOf,
@@ -52,7 +56,8 @@ export function PaybackCard({
   onRecord,
   closed,
 }: {
-  transfers: Transfer[]
+  expenses: Expense[]
+  settlements: Settlement[]
   groupName: string
   currentMemberId?: MemberId
   nameOf: (id: MemberId) => string
@@ -62,33 +67,25 @@ export function PaybackCard({
   closed: boolean
 }) {
   const [filter, setFilter] = useState<PaybackFilter>('all')
-  const [onlyMine, setOnlyMine] = useState(false)
   const [expanded, setExpanded] = useState<Set<MemberId>>(new Set())
   const [captureMode, setCaptureMode] = useState(false)
   const [sharing, setSharing] = useState(false)
   const [shareNote, setShareNote] = useState('')
-  const seeded = useRef(false)
   const cardRef = useRef<HTMLElement | null>(null)
 
   const view = useMemo(
-    () =>
-      buildPayback(transfers, {
-        filter,
-        onlyMember: onlyMine ? currentMemberId : null,
-        priorityMember: currentMemberId,
-      }),
-    [transfers, filter, onlyMine, currentMemberId],
+    () => buildPayback(expenses, settlements, { meId: currentMemberId ?? '', filter }),
+    [expenses, settlements, currentMemberId, filter],
   )
   const filterLabel = PAYBACK_FILTERS.find((option) => option.id === filter)?.label ?? 'All amounts'
-  const me = view.people.find((person) => person.memberId === currentMemberId)
-
-  useEffect(() => {
-    if (seeded.current || !currentMemberId) return
-    if (view.people.some((person) => person.memberId === currentMemberId)) {
-      seeded.current = true
-      setExpanded(new Set([currentMemberId]))
-    }
-  }, [view.people, currentMemberId])
+  const hasExpenses = expenses.some((expense) => !expense.deletedAt && expense.amountPaise > 0)
+  const hasPayments = settlements.some(
+    (settlement) =>
+      settlement.status !== 'disputed' &&
+      settlement.amountPaise > 0 &&
+      (settlement.from === currentMemberId || settlement.to === currentMemberId),
+  )
+  const filteredOut = hasExpenses && view.people.length === 0 && filter !== 'all'
 
   const toggle = (memberId: MemberId) => {
     setExpanded((previous) => {
@@ -99,10 +96,7 @@ export function PaybackCard({
     })
   }
 
-  const resetFilters = () => {
-    setFilter('all')
-    setOnlyMine(false)
-  }
+  const resetFilters = () => setFilter('all')
 
   const shareImage = async () => {
     if (!cardRef.current || sharing || view.people.length === 0) return
@@ -112,7 +106,6 @@ export function PaybackCard({
     let dataUrl: string | null = null
     const filename = `rupeetrail-${slugify(groupName)}-${filter}.png`
     try {
-      // Let the expanded capture layout paint before the clone is taken.
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       )
@@ -132,8 +125,8 @@ export function PaybackCard({
       if (canShareFiles) {
         await navigator.share({
           files: [file],
-          title: `${groupName} · who pays whom`,
-          text: `${groupName} · ${filterLabel}${onlyMine ? ' · only mine' : ''}`,
+          title: `${groupName} · who owes whom`,
+          text: `${groupName} · ${filterLabel}`,
         })
         setShareNote('Shared.')
       } else {
@@ -156,32 +149,50 @@ export function PaybackCard({
     }
   }
 
-  const renderActions = (transfer: Transfer) => {
-    if (captureMode || closed || !currentMemberId) return null
-    const involved = transfer.from === currentMemberId || transfer.to === currentMemberId
-    if (!involved) return null
-    const upiId = upiOf(transfer.to)
+  const renderLine = (line: PaybackLine, person: PaybackPerson, direction: 'in' | 'out') => {
+    const displayName = nameOf(person.memberId)
+    const upiId = upiOf(person.memberId)
     const payLink =
-      transfer.from === currentMemberId && upiId && isValidUpi(upiId)
+      direction === 'out' && currentMemberId && upiId && isValidUpi(upiId)
         ? upiPayLink({
             upiId,
-            payeeName: nameOf(transfer.to),
-            amountPaise: transfer.amountPaise,
-            note: `${groupName} settlement`,
+            payeeName: displayName,
+            amountPaise: line.amountPaise,
+            note: `${groupName} · ${line.description}`,
           })
         : null
 
     return (
-      <div className="payback-line__actions">
-        {payLink ? (
-          <a className="btn btn--tiny btn--soft" href={payLink}>
-            Pay {nameOf(transfer.to)} by UPI
-          </a>
+      <li key={`${line.expenseId}-${line.amountPaise}`} className="payback-line-wrap">
+        <div className="payback-line">
+          <span className="payback-line__text">
+            {line.description} <small>{formatDay(line.date)}</small>
+          </span>
+          <strong className="payback-line__amount">{formatPaise(line.amountPaise)}</strong>
+        </div>
+        {!captureMode && !closed && currentMemberId ? (
+          <div className="payback-line__actions">
+            {payLink ? (
+              <a className="btn btn--tiny btn--soft" href={payLink}>
+                Pay {displayName} by UPI
+              </a>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn--tiny"
+              onClick={() =>
+                onRecord(
+                  direction === 'in'
+                    ? { from: person.memberId, to: currentMemberId, amountPaise: line.amountPaise }
+                    : { from: currentMemberId, to: person.memberId, amountPaise: line.amountPaise },
+                )
+              }
+            >
+              {direction === 'in' ? 'Record received' : 'Record payment'}
+            </button>
+          </div>
         ) : null}
-        <button type="button" className="btn btn--tiny" onClick={() => onRecord(transfer)}>
-          {transfer.from === currentMemberId ? 'Record payment' : 'Record received'}
-        </button>
-      </div>
+      </li>
     )
   }
 
@@ -189,30 +200,31 @@ export function PaybackCard({
     <section className="plan-card payback-card" ref={cardRef}>
       <div className="plan-card__head">
         <h3>
-          <IconUsers size={17} /> Who pays whom
+          <IconUsers size={17} /> Who owes whom
         </h3>
         {view.people.length > 0 ? (
           <StatusPill tone="ok">
-            {view.transfers.length} {view.transfers.length === 1 ? 'transfer' : 'transfers'}
+            {view.expenseCount} {view.expenseCount === 1 ? 'expense' : 'expenses'}
           </StatusPill>
         ) : null}
       </div>
 
-      <p className="payback-sub">Tap a person to see exactly who pays them and whom they pay.</p>
+      <p className="payback-sub">
+        Every shared expense, person by person. Full totals include all expenses — payments are
+        listed separately and never subtracted.
+      </p>
 
       {captureMode ? (
         <p className="payback-capture-line">
-          {filterLabel}
-          {onlyMine ? ' · only mine' : ''} · {view.people.length}{' '}
-          {view.people.length === 1 ? 'person' : 'people'}
+          {filterLabel} · {view.people.length} {view.people.length === 1 ? 'person' : 'people'}
         </p>
       ) : (
         <div className="payback-tools">
           <label className="payback-filter">
-            <span>Amount</span>
+            <span>Share amount</span>
             <span className="payback-select">
               <select
-                aria-label="Filter transfers by amount"
+                aria-label="Filter expenses by share amount"
                 value={filter}
                 onChange={(event) => setFilter(event.target.value as PaybackFilter)}
               >
@@ -225,22 +237,6 @@ export function PaybackCard({
               <IconChevron size={13} />
             </span>
           </label>
-          {currentMemberId ? (
-            <button
-              type="button"
-              className={`chip${onlyMine ? ' is-active' : ''}`}
-              aria-pressed={onlyMine}
-              onClick={() => {
-                const next = !onlyMine
-                setOnlyMine(next)
-                if (next && currentMemberId) {
-                  setExpanded((previous) => new Set(previous).add(currentMemberId))
-                }
-              }}
-            >
-              Only mine
-            </button>
-          ) : null}
           <button
             type="button"
             className="btn btn--tiny payback-share"
@@ -254,47 +250,48 @@ export function PaybackCard({
 
       {shareNote && !captureMode ? <p className="payback-share-note">{shareNote}</p> : null}
 
-      {transfers.length === 0 ? (
-        <div className="plan-empty">
-          <IconCheck size={26} />
-          <p>Everyone is settled up. Nothing needs to move.</p>
+      {!currentMemberId ? (
+        <div className="payback-empty">
+          <p>Open this group as a member to see what each person owes.</p>
         </div>
       ) : view.people.length === 0 ? (
         <div className="payback-empty">
-          <p>No transfers match this filter.</p>
-          {captureMode ? null : (
+          <p>
+            {filteredOut
+              ? 'No expense shares match this filter.'
+              : hasPayments
+                ? 'No shared expenses yet. Payments between you are listed below.'
+                : 'No shared expenses yet.'}
+          </p>
+          {filteredOut ? (
             <button type="button" className="btn btn--tiny btn--soft" onClick={resetFilters}>
               Show all amounts
             </button>
-          )}
+          ) : null}
         </div>
       ) : (
         <>
           <div className="payback-summary">
-            <span className="payback-summary__stat">
-              <strong>{formatPaise(view.totalPaise)}</strong> moving
+            <span className="payback-summary__stat is-get">
+              You paid for others <strong>{formatPaise(view.theyOwePaise)}</strong>
+            </span>
+            <span className="payback-summary__stat is-pay">
+              Others paid for you <strong>{formatPaise(view.youOwePaise)}</strong>
             </span>
             <span className="payback-summary__stat">
-              {view.transfers.length} {view.transfers.length === 1 ? 'transfer' : 'transfers'}
+              {view.expenseCount} {view.expenseCount === 1 ? 'expense' : 'expenses'}
             </span>
-            {me && me.incomingPaise > 0 ? (
-              <span className="payback-summary__stat is-get">
-                You receive <strong>{formatPaise(me.incomingPaise)}</strong>
-              </span>
-            ) : null}
-            {me && me.outgoingPaise > 0 ? (
-              <span className="payback-summary__stat is-pay">
-                You pay <strong>{formatPaise(me.outgoingPaise)}</strong>
+            {view.receivedPaise > 0 || view.sentPaise > 0 ? (
+              <span className="payback-summary__stat is-muted">
+                {formatPaise(view.receivedPaise)} received · {formatPaise(view.sentPaise)} sent in
+                payments (not deducted)
               </span>
             ) : null}
           </div>
 
           <ul className="payback-people">
             {view.people.map((person) => {
-              const isMe = person.memberId === currentMemberId
               const open = captureMode || expanded.has(person.memberId)
-              const net = person.incomingPaise - person.outgoingPaise
-              const netTone = net > 0 ? 'is-get' : net < 0 ? 'is-pay' : 'is-even'
               const displayName = nameOf(person.memberId)
               return (
                 <li key={person.memberId} className={`payback-person${open ? ' is-open' : ''}`}>
@@ -302,81 +299,92 @@ export function PaybackCard({
                     type="button"
                     className="payback-person__head"
                     aria-expanded={open}
+                    aria-label={`${displayName}, ${open ? 'hide' : 'show'} expenses`}
                     onClick={() => {
                       if (!captureMode) toggle(person.memberId)
                     }}
                   >
                     <Avatar name={displayName} color={colorOf(person.memberId)} size={32} />
                     <span className="payback-person__id">
-                      <span className="payback-person__name">
-                        {displayName}
-                        {isMe ? <em>you</em> : null}
-                      </span>
-                      <span className="payback-person__meta">
-                        {activityLabel(person, isMe)}
-                      </span>
+                      <span className="payback-person__name">{displayName}</span>
+                      <span className="payback-person__meta">{countLine(person)}</span>
                     </span>
-                    <span className={`payback-person__net ${netTone}`}>
-                      <strong>{net === 0 ? '—' : formatPaise(Math.abs(net))}</strong>
-                      <span>{net > 0 ? 'gets back' : net < 0 ? 'pays' : 'even'}</span>
+                    <span className="payback-person__amounts">
+                      {person.theyOwePaise > 0 ? (
+                        <span className="payback-person__amount is-get">
+                          <strong>{formatPaise(person.theyOwePaise)}</strong>
+                          <span>owes you</span>
+                        </span>
+                      ) : null}
+                      {person.youOwePaise > 0 ? (
+                        <span className="payback-person__amount is-pay">
+                          <strong>{formatPaise(person.youOwePaise)}</strong>
+                          <span>you owe</span>
+                        </span>
+                      ) : null}
+                      {person.theyOwePaise === 0 && person.youOwePaise === 0 ? (
+                        <span className="payback-person__amount is-even">
+                          <strong>—</strong>
+                          <span>payments only</span>
+                        </span>
+                      ) : null}
                     </span>
                     <IconChevron size={15} className="payback-person__chev" />
                   </button>
 
                   {open ? (
                     <div className="payback-person__body">
-                      {person.incoming.length > 0 ? (
+                      {person.theyOwe.length > 0 ? (
                         <div className="payback-group">
                           <p className="payback-group__label">
-                            {isMe ? 'Coming to you' : `Coming to ${displayName}`}
+                            They owe you
                             <span>
-                              {person.incoming.length} · {formatPaise(person.incomingPaise)}
+                              {person.theyOwe.length} · {formatPaise(person.theyOwePaise)}
                             </span>
                           </p>
                           <ul className="payback-lines">
-                            {person.incoming.map((transfer, index) => (
-                              <li
-                                key={`${transfer.from}-${transfer.to}-${index}`}
-                                className="payback-line-wrap"
-                              >
-                                <div className="payback-line">
-                                  <span className="payback-line__text">
-                                    {nameOf(transfer.from)} should pay {isMe ? 'you' : displayName}
-                                  </span>
-                                  <strong className="payback-line__amount">
-                                    {formatPaise(transfer.amountPaise)}
-                                  </strong>
-                                </div>
-                                {renderActions(transfer)}
-                              </li>
-                            ))}
+                            {person.theyOwe.map((line) => renderLine(line, person, 'in'))}
                           </ul>
                         </div>
                       ) : null}
 
-                      {person.outgoing.length > 0 ? (
+                      {person.youOwe.length > 0 ? (
                         <div className="payback-group">
                           <p className="payback-group__label">
-                            {isMe ? 'Going out' : `${displayName} pays out`}
+                            You owe them
                             <span>
-                              {person.outgoing.length} · {formatPaise(person.outgoingPaise)}
+                              {person.youOwe.length} · {formatPaise(person.youOwePaise)}
                             </span>
                           </p>
                           <ul className="payback-lines">
-                            {person.outgoing.map((transfer, index) => (
+                            {person.youOwe.map((line) => renderLine(line, person, 'out'))}
+                          </ul>
+                        </div>
+                      ) : null}
+
+                      {person.payments.length > 0 ? (
+                        <div className="payback-group">
+                          <p className="payback-group__label">
+                            Payments between you
+                            <span>not deducted</span>
+                          </p>
+                          <ul className="payback-lines">
+                            {person.payments.map((payment) => (
                               <li
-                                key={`${transfer.from}-${transfer.to}-${index}`}
-                                className="payback-line-wrap"
+                                key={payment.settlementId}
+                                className="payback-line-wrap payback-line-wrap--payment"
                               >
                                 <div className="payback-line">
                                   <span className="payback-line__text">
-                                    {isMe ? 'You' : displayName} should pay {nameOf(transfer.to)}
+                                    {payment.direction === 'in'
+                                      ? `${displayName} paid you`
+                                      : `You paid ${displayName}`}{' '}
+                                    <small>{formatDay(payment.date)}</small>
                                   </span>
                                   <strong className="payback-line__amount">
-                                    {formatPaise(transfer.amountPaise)}
+                                    {formatPaise(payment.amountPaise)}
                                   </strong>
                                 </div>
-                                {renderActions(transfer)}
                               </li>
                             ))}
                           </ul>
@@ -394,15 +402,12 @@ export function PaybackCard({
       {captureMode ? (
         <div className="payback-capture-foot">
           <span>RupeeSplit · {groupName}</span>
-          <span>
-            {filterLabel}
-            {onlyMine ? ' · only mine' : ''}
-          </span>
+          <span>{filterLabel}</span>
         </div>
       ) : (
         <p className="fineprint">
-          Calculated from confirmed balances. RupeeSplit never touches the money — record what
-          actually moved.
+          Built from the actual expenses, not a netted settlement plan. Record payments below when
+          money moves — the totals here always show what each expense cost.
         </p>
       )}
     </section>

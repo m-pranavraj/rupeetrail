@@ -354,31 +354,57 @@ describe('shared groups', () => {
     expect(screen.getByRole('dialog')).toBeTruthy()
   })
 
-  it('shows who pays whom, person by person, with a working amount filter', async () => {
-    seedDevice()
+  it('shows every expense per person and never deducts payments from the totals', async () => {
+    const snapshot = baseSnapshot()
+    snapshot.expenses.push({
+      ...snapshot.expenses[0],
+      id: 'e_lunch',
+      description: 'Lunch',
+      amountPaise: 40000,
+      date: Date.now() - 1800000,
+    })
+    snapshot.settlements = [
+      {
+        id: 's_priya_paid',
+        groupId: GROUP_ID,
+        from: PRIYA,
+        to: ME,
+        amountPaise: 30000,
+        method: 'upi',
+        status: 'confirmed',
+        createdAt: Date.now() - 600000,
+        updatedAt: Date.now() - 600000,
+      },
+    ]
+    server = snapshot
+    seedDevice(snapshot)
     const user = userEvent.setup()
     renderApp()
 
     await user.click(await screen.findByText('Goa plan'))
     await user.click(await screen.findByRole('tab', { name: 'Settle' }))
 
-    expect(await screen.findByText('Who pays whom')).toBeTruthy()
-    expect(await screen.findByText('Priya should pay you')).toBeTruthy()
-    expect(screen.getByText('Coming to you')).toBeTruthy()
+    expect(await screen.findByText('Who owes whom')).toBeTruthy()
+    // ₹500 from Dinner + ₹200 from Lunch, untouched by the ₹300 Priya already paid.
+    expect(screen.getAllByText('₹700').length).toBeGreaterThan(0)
+    expect(screen.getByText('owes you')).toBeTruthy()
+    expect(screen.getByText('2 expenses · 1 payment')).toBeTruthy()
 
-    await user.click(screen.getByRole('button', { name: /Priya/ }))
-    expect(await screen.findByText('Priya pays out')).toBeTruthy()
-    expect(await screen.findByText('Priya should pay Arjun')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: /Priya, show expenses/i }))
+    expect(await screen.findByText(/Dinner/)).toBeTruthy()
+    expect(await screen.findByText(/Lunch/)).toBeTruthy()
+    expect(await screen.findByText('Priya paid you')).toBeTruthy()
+    expect(screen.getByText('not deducted')).toBeTruthy()
+    expect(screen.getAllByText('₹300').length).toBeGreaterThan(0)
 
-    await user.selectOptions(screen.getByLabelText('Filter transfers by amount'), 'over5000')
-    expect(await screen.findByText('No transfers match this filter.')).toBeTruthy()
+    await user.selectOptions(screen.getByLabelText('Filter expenses by share amount'), 'over5000')
+    expect(await screen.findByText('No expense shares match this filter.')).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: 'Show all amounts' }))
-    expect(await screen.findByText('Who pays whom')).toBeTruthy()
-    expect(await screen.findByText('Priya should pay you')).toBeTruthy()
+    expect(screen.getAllByText('₹700').length).toBeGreaterThan(0)
   })
 
-  it('offers UPI to the person who actually owes the money', async () => {
+  it('offers UPI to the person you actually owe money', async () => {
     const snapshot = baseSnapshot()
     snapshot.expenses = [
       {
@@ -394,7 +420,9 @@ describe('shared groups', () => {
     await user.click(await screen.findByText('Goa plan'))
     await user.click(await screen.findByRole('tab', { name: 'Settle' }))
 
-    expect(await screen.findByText('You should pay Priya')).toBeTruthy()
+    expect(await screen.findByText('you owe')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: /Priya, show expenses/i }))
+    expect(await screen.findByText('You owe them')).toBeTruthy()
     const payLink = await screen.findByRole('link', { name: /Pay Priya by UPI/i })
     expect(payLink.getAttribute('href')).toContain('upi://pay?')
     expect(payLink.getAttribute('href')).toContain('pa=priya%40ybl')

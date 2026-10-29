@@ -1,8 +1,6 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 import type { Expense, Group, MemberId, Settlement, SettlementStatus } from '../types'
-import { computeBalances } from '../lib/balances'
 import { formatPaise, parseRupees } from '../lib/money'
-import { planSettlements } from '../lib/settlement'
 import { useStore } from '../lib/store'
 import { PaybackCard } from './PaybackCard'
 import { Sheet, StatusPill } from './ui'
@@ -36,12 +34,6 @@ export function SettleTab({
 
   type PayingState = typeof paying
 
-  const balances = useMemo(
-    () => computeBalances({ group, expenses, settlements }),
-    [group, expenses, settlements],
-  )
-  const plan = useMemo(() => planSettlements(balances), [balances])
-
   const name = (id: string) => {
     if (id.startsWith('manual:')) {
       const parts = id.split(':')
@@ -58,7 +50,8 @@ export function SettleTab({
   return (
     <div className="settle-tab">
       <PaybackCard
-        transfers={plan.transfers}
+        expenses={expenses}
+        settlements={settlements}
         groupName={group.name}
         currentMemberId={currentMemberId}
         nameOf={name}
