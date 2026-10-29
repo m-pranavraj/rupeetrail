@@ -138,4 +138,47 @@ describe('voice command parsing', () => {
       name: 'Goa trip',
     })
   })
+
+  it('reads who paid and who the expense was for', () => {
+    const result = parseVoiceCommand('arjun paid 500 for priya for pani puri', context)
+    expect(result.command).toMatchObject({
+      type: 'add_expense',
+      description: 'Pani Puri',
+      amountPaise: 50000,
+      payerId: 'arjun',
+      splitMode: 'exact',
+    })
+    if (result.command?.type !== 'add_expense') throw new Error('expected expense command')
+    expect(result.command.participantIds).toEqual(['priya'])
+    expect(result.command.splitValues).toEqual({ priya: 50000 })
+    expect(result.reply).toContain('Arjun paid')
+  })
+
+  it('matches a misheard payer name and keeps it out of the item name', () => {
+    const result = parseVoiceCommand('arjan paid twelve hundred for dinner', context)
+    expect(result.command).toMatchObject({
+      type: 'add_expense',
+      description: 'Dinner',
+      amountPaise: 120000,
+      payerId: 'arjun',
+    })
+    expect(result.command?.type === 'add_expense' && result.command.category).toBe('food')
+  })
+
+  it('splits only between the named people when the payer was stated', () => {
+    const result = parseVoiceCommand('priya paid 300 for rahul and neha for lunch', context)
+    if (result.command?.type !== 'add_expense') throw new Error('expected expense command')
+    expect(result.command.payerId).toBe('priya')
+    expect(result.command.splitValues).toEqual({ rahul: 15000, neha: 15000 })
+  })
+
+  it('treats the speaker as payer when no name is given', () => {
+    const result = parseVoiceCommand('five hundred for cab', context)
+    expect(result.command).toMatchObject({
+      type: 'add_expense',
+      amountPaise: 50000,
+      payerId: 'me',
+      description: 'Cab',
+    })
+  })
 })

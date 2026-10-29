@@ -1,6 +1,8 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ActivityIndicator,
   Alert,
+  Animated,
   Linking,
   Pressable,
   ScrollView,
@@ -9,6 +11,7 @@ import {
   Text,
   TextInput,
   View,
+  type LayoutChangeEvent,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
@@ -17,6 +20,7 @@ import {
   Avatar,
   AvatarStack,
   Banner,
+  BusyLine,
   Button,
   Card,
   Divider,
@@ -47,6 +51,7 @@ import { computeBalances, isReconciled, nameOf } from '../lib/balances'
 import { formatPaise, parseRupees } from '../lib/money'
 import { planSettlements } from '../lib/settlement'
 import { shareTripCsv } from '../lib/csv'
+import { currentPoint } from '../lib/geo'
 import { isValidUpi, upiPayLink } from '../lib/upi'
 import { categoryColors, categoryEmoji, colors, gradients, radius, spacing, tints } from '../theme'
 import type { SplitMode } from '../lib/types'
@@ -101,7 +106,6 @@ export function GroupScreen() {
     addPerson,
     removePerson,
     settle,
-    confirmSettlement,
     tagPlace,
     clearPlace,
     openGroup,
@@ -109,6 +113,7 @@ export function GroupScreen() {
 
   const insets = useSafeAreaInsets()
   const [tab, setTab] = useState<Tab>('expenses')
+  const [tabTrack, setTabTrack] = useState(0)
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -121,8 +126,27 @@ export function GroupScreen() {
   const [payToName, setPayToName] = useState('')
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState<'upi' | 'cash' | 'bank'>('upi')
+  const [payingKey, setPayingKey] = useState<string | null>(null)
+  const [submittingPay, setSubmittingPay] = useState(false)
   const [expandedMember, setExpandedMember] = useState<string | null>(null)
   const [toast, setToast] = useState<{ message: string; tone: 'ok' | 'error' } | null>(null)
+  const [here, setHere] = useState<{ lat: number; lng: number } | null>(null)
+  const [focusHere, setFocusHere] = useState(true)
+  const [locating, setLocating] = useState(false)
+
+  const tabIndex = Math.max(0, TABS.findIndex((entry) => entry.id === tab))
+  const tabProgress = useRef(new Animated.Value(tabIndex)).current
+  const tabSlot = tabTrack > 0 ? (tabTrack - 20) / TABS.length : 0
+
+  useEffect(() => {
+    Animated.spring(tabProgress, {
+      toValue: tabIndex,
+      useNativeDriver: true,
+      damping: 18,
+      stiffness: 190,
+      mass: 0.7,
+    }).start()
+  }, [tabIndex, tabProgress])
 
   const snapshot = active?.snapshot
   const group = snapshot?.group
@@ -216,6 +240,27 @@ export function GroupScreen() {
     setTimeout(() => setToast(null), 2_400)
   }
 
+  const locate = async () => {
+    if (locating) return
+    setLocating(true)
+    setFocusHere(true)
+    try {
+      const point = await currentPoint()
+      if (point) setHere({ lat: point.lat, lng: point.lng })
+      else notify('Location is off for this app. Allow it in system settings.', 'error')
+    } finally {
+      setLocating(false)
+    }
+  }
+
+  // Opening the map for the first time asks for a fix so there is always
+  // somewhere recognisable on screen, even with zero tagged expenses.
+  useEffect(() => {
+    if (tab !== 'map' || here) return
+    void locate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])
+
   if (!active || !group || !snapshot || !me || !membership) {
     return (
       <Screen>
@@ -290,13 +335,31 @@ export function GroupScreen() {
       notify('Enter an amount greater than zero.', 'error')
       return
     }
-    const ok = await settle({ from, to, amountPaise: paise, method: payMethod })
-    if (ok) {
-      buzz()
-      setManualPay(false)
-      notify('Payment recorded — the balance is updated.')
-    } else {
-      notify('Could not record that payment.', 'error')
+    if (submittingPay) return
+    setSubmittingPay(true)
+    try {
+      const ok = await settle({ from, to, amountPaise: paise, method: payMethod })
+      if (ok) {
+        buzz()
+        setManualPay(false)
+        notify('Payment recorded — balances updated.')
+      } else {
+        notify('Could not record that payment.', 'error')
+      }
+    } finally {
+      setSubmittingPay(false)
+    }
+  }
+
+  const recordTransfer = async (from: string, to: string, amountPaise: number, key: string) => {
+    if (payingKey) return
+    setPayingKey(key)
+    try {
+      const ok = await settle({ from, to, amountPaise })
+      if (ok) buzz()
+      notify(ok ? 'Payment recorded — balances updated.' : 'Could not record that.', ok ? 'ok' : 'error')
+    } finally {
+      setPayingKey(null)
     }
   }
 
@@ -331,14 +394,30 @@ export function GroupScreen() {
           <Text style={styles.groupName} numberOfLines={1}>
             {group.emoji} {group.name}
           </Text>
-          <View style={styles.headerMeta}>
-            <View style={[styles.liveDot, { backgroundColor: active.live === 'live' ? colors.accent : colors.warn }]} />
+          <Pressable onPress={() => void refresh()} hitSlop={10} style={styles.headerMeta}>
+            <View
+              style={[
+                styles.liveDot,
+                {
+                  backgroundColor:
+                    active.live === 'live'
+                      ? colors.accent
+                      : active.live === 'connecting'
+                        ? colors.info
+                        : colors.lime,
+                },
+              ]}
+            />
             <Text style={styles.headerMetaText}>
-              {active.live === 'live' ? 'live' : active.live === 'connecting' ? 'connecting' : 'polling'} ·{' '}
-              {activeMembers.length} {activeMembers.length === 1 ? 'person' : 'people'}
+              {active.live === 'live'
+                ? 'Live sync'
+                : active.live === 'connecting'
+                  ? 'Connecting'
+                  : 'Fast sync'}{' '}
+              · {activeMembers.length} {activeMembers.length === 1 ? 'person' : 'people'}
               {group.status === 'closed' ? ' · closed' : ''}
             </Text>
-          </View>
+          </Pressable>
         </View>
         <IconButton
           label="Invite"
@@ -353,7 +432,36 @@ export function GroupScreen() {
       </View>
 
       {/* ------------------------------------------------------------ tabs */}
-      <View style={styles.tabBar}>
+      <View
+        style={styles.tabBar}
+        onLayout={(event: LayoutChangeEvent) => setTabTrack(event.nativeEvent.layout.width)}
+      >
+        {tabSlot > 0 ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.tabPill,
+              {
+                width: tabSlot,
+                transform: [
+                  {
+                    translateX: tabProgress.interpolate({
+                      inputRange: [0, TABS.length - 1],
+                      outputRange: [0, (tabSlot + 4) * (TABS.length - 1)],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <LinearGradient
+              colors={gradients.primary}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+          </Animated.View>
+        ) : null}
         {TABS.map((entry) => {
           const activeTab = tab === entry.id
           return (
@@ -367,14 +475,6 @@ export function GroupScreen() {
               }}
               style={styles.tab}
             >
-              {activeTab ? (
-                <LinearGradient
-                  colors={gradients.primary}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={StyleSheet.absoluteFill}
-                />
-              ) : null}
               <Ionicons
                 name={entry.icon}
                 size={15}
@@ -632,8 +732,8 @@ export function GroupScreen() {
                         ))
                       )}
                       <Muted small>
-                        Net = what they paid − their share ± confirmed payments. The whole group must add up to
-                        zero; right now it {reconcile ? 'does' : 'does not'}.
+                        Net = what they paid − their share, adjusted the moment a payment is recorded. The whole
+                        group must add up to zero; right now it {reconcile ? 'does' : 'does not'}.
                       </Muted>
                     </View>
                   ) : null}
@@ -701,18 +801,22 @@ export function GroupScreen() {
                         ) : null}
                         {involvesMe ? (
                           <PressableScale
-                            onPress={async () => {
-                              buzz()
-                              const ok = await settle({
-                                from: transfer.from,
-                                to: transfer.to,
-                                amountPaise: transfer.amountPaise,
-                              })
-                              notify(ok ? 'Payment recorded — both sides confirm.' : 'Could not record that.', ok ? 'ok' : 'error')
-                            }}
+                            disabled={payingKey !== null}
+                            onPress={() =>
+                              void recordTransfer(
+                                transfer.from,
+                                transfer.to,
+                                transfer.amountPaise,
+                                `${transfer.from}-${transfer.to}-${index}`,
+                              )
+                            }
                           >
                             <View style={styles.recordButton}>
-                              <Text style={styles.recordText}>Record</Text>
+                              {payingKey === `${transfer.from}-${transfer.to}-${index}` ? (
+                                <ActivityIndicator size="small" color={colors.accent} />
+                              ) : (
+                                <Text style={styles.recordText}>Record</Text>
+                              )}
                             </View>
                           </PressableScale>
                         ) : null}
@@ -744,30 +848,28 @@ export function GroupScreen() {
                         </Text>
                         <Text style={styles.personMeta}>
                           {formatPaise(payment.amountPaise)} · {payment.method} ·{' '}
-                          {payment.status.replace(/_/g, ' ')}
+                          {new Date(payment.updatedAt).toLocaleTimeString('en-IN', {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })}
                         </Text>
                       </View>
-                      {payment.status !== 'confirmed' && payment.status !== 'disputed' ? (
-                        <View style={{ flexDirection: 'row', gap: spacing(2.5) }}>
-                          {payment.from === me.id && payment.status !== 'payer_confirmed' ? (
-                            <Pressable onPress={() => void confirmSettlement(payment.id, 'paid')} hitSlop={8}>
-                              <Text style={styles.link}>I paid</Text>
-                            </Pressable>
-                          ) : null}
-                          {payment.to === me.id && payment.status !== 'receiver_confirmed' ? (
-                            <Pressable onPress={() => void confirmSettlement(payment.id, 'received')} hitSlop={8}>
-                              <Text style={styles.link}>Got it</Text>
-                            </Pressable>
-                          ) : null}
-                        </View>
-                      ) : (
-                        <Pill tone={payment.status === 'confirmed' ? 'ok' : 'bad'}>{payment.status.replace(/_/g, ' ')}</Pill>
-                      )}
+                      <Pill
+                        tone={
+                          payment.status === 'confirmed'
+                            ? 'ok'
+                            : payment.status === 'disputed'
+                              ? 'bad'
+                              : 'info'
+                        }
+                      >
+                        {payment.status === 'pending' ? 'recorded' : payment.status.replace(/_/g, ' ')}
+                      </Pill>
                     </View>
                   ))}
                 <Muted small>
-                  In-group payments confirm on both phones. A payment with someone outside the group moves the
-                  balance immediately.
+                  Balances move the moment a payment is recorded. If money never actually moved, open the
+                  payment and mark it disputed to reverse it.
                 </Muted>
               </Card>
             ) : null}
@@ -789,14 +891,25 @@ export function GroupScreen() {
                       : 'Tag expenses with a place to draw your trip.'}
                   </Muted>
                 </View>
-                <View style={styles.mapPinBadge}>
-                  <Ionicons name="location" size={16} color={colors.accent} />
-                </View>
+                <PressableScale onPress={() => void locate()} scaleTo={0.92} accessibilityLabel="Show my location">
+                  <View style={styles.mapPinBadge}>
+                    {locating ? (
+                      <ActivityIndicator size="small" color={colors.accent} />
+                    ) : (
+                      <Ionicons name="locate" size={16} color={colors.accent} />
+                    )}
+                  </View>
+                </PressableScale>
               </View>
               <TripMap
                 points={mapPoints}
+                here={here}
+                focusHere={focusHere}
                 height={260}
-                onPickPoint={(id) => setDetailId(id)}
+                onPickPoint={(id) => {
+                  setFocusHere(false)
+                  setDetailId(id)
+                }}
                 emptyHint="Open an expense, tap Tag place, and it appears here with its amount."
               />
               {mapPoints.length > 0 ? (
@@ -820,7 +933,10 @@ export function GroupScreen() {
                   .map((point) => (
                     <Pressable
                       key={point.id}
-                      onPress={() => setDetailId(point.id)}
+                      onPress={() => {
+                        setFocusHere(false)
+                        setDetailId(point.id)
+                      }}
                       style={styles.stopRow}
                     >
                       <View style={[styles.stopDot, { backgroundColor: point.color ?? colors.accent }]} />
@@ -994,7 +1110,7 @@ export function GroupScreen() {
           footer={
             <Button
               label="Record payment"
-              loading={busy}
+              loading={submittingPay}
               disabled={!payAmount.trim()}
               onPress={() => void submitManualPay()}
             />
@@ -1099,7 +1215,7 @@ export function GroupScreen() {
       ) : null}
 
       {toast ? <Toast message={toast.message} tone={toast.tone} /> : null}
-      {busy ? <View pointerEvents="none" style={styles.busyBar} /> : null}
+      <BusyLine visible={busy} />
     </View>
   )
 }
@@ -1138,6 +1254,14 @@ const styles = StyleSheet.create({
     padding: spacing(1),
     gap: spacing(1),
   },
+  tabPill: {
+    position: 'absolute',
+    left: 4,
+    top: 4,
+    bottom: 4,
+    borderRadius: radius.pill,
+    overflow: 'hidden',
+  },
   tab: {
     flex: 1,
     flexDirection: 'row',
@@ -1146,7 +1270,6 @@ const styles = StyleSheet.create({
     gap: spacing(1.5),
     paddingVertical: spacing(2.2),
     borderRadius: radius.pill,
-    overflow: 'hidden',
   },
   tabLabel: { color: colors.muted, fontSize: 11.5, fontWeight: '800' },
 
@@ -1317,13 +1440,4 @@ const styles = StyleSheet.create({
     borderColor: tints.warn.border,
   },
   closedText: { color: colors.warn, fontSize: 11, fontWeight: '700' },
-  busyBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 2,
-    backgroundColor: colors.accent,
-    opacity: 0.5,
-  },
 })

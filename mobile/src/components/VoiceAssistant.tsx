@@ -11,7 +11,7 @@ import { parseVoiceCommand, type AiCommand } from '../lib/voice-command'
 import { useStore } from '../state'
 import { colors, elevation, gradients, motion, radius, spacing } from '../theme'
 import { PressableScale, buzz, tap } from './ui'
-import type { Expense, Split } from '../lib/types'
+import type { Expense, ExpenseCategory, Split } from '../lib/types'
 
 type Tone = 'idle' | 'listening' | 'processing' | 'confirm' | 'done' | 'error'
 
@@ -59,6 +59,9 @@ export function VoiceAssistant({ onTabChange, onOpenGroup }: VoiceAssistantProps
   const watchdog = useRef<ReturnType<typeof setTimeout> | null>(null)
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const listening = useRef(false)
+  const heard = useRef('')
+  const partial = useRef('')
+  const processed = useRef(false)
 
   const snapshot = active?.snapshot
   const group = snapshot?.group
@@ -107,6 +110,14 @@ export function VoiceAssistant({ onTabChange, onOpenGroup }: VoiceAssistantProps
   const reset = useCallback(() => {
     clearTimers()
     listening.current = false
+    processed.current = false
+    heard.current = ''
+    partial.current = ''
+    try {
+      ExpoSpeechRecognitionModule.abort()
+    } catch {
+      // not running
+    }
     setPending(null)
     setTone('idle')
     setReply('')
@@ -168,7 +179,7 @@ export function VoiceAssistant({ onTabChange, onOpenGroup }: VoiceAssistantProps
             description: cmd.description,
             amountPaise: cmd.amountPaise,
             date: Date.now(),
-            category: 'other',
+            category: (cmd.category as ExpenseCategory | undefined) ?? 'other',
             payers: [{ memberId: payerId, amountPaise: cmd.amountPaise }],
             split,
             notes: cmd.notes || undefined,
@@ -398,16 +409,18 @@ export function VoiceAssistant({ onTabChange, onOpenGroup }: VoiceAssistantProps
     handleRef.current = handleTranscript
   }, [handleTranscript])
 
-  const stop = useCallback(() => {
-    clearTimers()
-    listening.current = false
+  // Continuous dictation: keep the microphone open until the speaker stops,
+  // then process everything that was heard in one pass. Tapping the mic is a
+  // "done talking" gesture, not a cancel.
+  const stopAndProcess = useCallback(() => {
+    if (!listening.current) return
+    setTone('processing')
     try {
       ExpoSpeechRecognitionModule.stop()
     } catch {
-      // not running
+      // already stopped — the end event still delivers what was heard
     }
-    setTone('idle')
-  }, [clearTimers])
+  }, [])
 
   const start = useCallback(async () => {
     clearTimers()
@@ -415,6 +428,9 @@ export function VoiceAssistant({ onTabChange, onOpenGroup }: VoiceAssistantProps
     setReply('')
     setTranscript('')
     setPending(null)
+    heard.current = ''
+    partial.current = ''
+    processed.current = false
 
     try {
       const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync()
@@ -431,26 +447,47 @@ export function VoiceAssistant({ onTabChange, onOpenGroup }: VoiceAssistantProps
     setTone('listening')
     tap()
 
+    // Absolute ceiling so a stuck recogniser cannot hold the mic forever.
     watchdog.current = setTimeout(() => {
       watchdog.current = null
-      listening.current = false
+      if (!listening.current) return
       try {
-        ExpoSpeechRecognitionModule.abort()
+        ExpoSpeechRecognitionModule.stop()
       } catch {
-        // already stopped
+        listening.current = false
+        setError('The microphone did not respond. Try again.')
+        setTone('error')
       }
-      setError('No response from the microphone. Try again.')
-      setTone('error')
-    }, 12_000)
+    }, 60_000)
 
     try {
       ExpoSpeechRecognitionModule.start({
         lang: 'en-IN',
         interimResults: true,
-        continuous: false,
-        maxAlternatives: 1,
+        continuous: true,
+        maxAlternatives: 3,
         requiresOnDeviceRecognition: false,
         addsPunctuation: false,
+        // Bias the recogniser towards the names and words this ledger uses.
+        contextualStrings: [
+          ...members.map((member) => member.name),
+          ...members.map((member) => member.name.split(' ')[0]),
+          ...groups.map((entry) => entry.name),
+          'paid',
+          'split',
+          'rupees',
+          'balance',
+          'settle',
+          'dinner',
+          'lunch',
+          'pani puri',
+        ].filter((word, index, all) => word.length > 1 && all.indexOf(word) === index),
+        androidIntentOptions: {
+          // Keep listening through natural pauses, then end on real silence.
+          EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 1_500,
+          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 2_800,
+          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 4_500,
+        },
       })
     } catch (cause) {
       listening.current = false
@@ -458,18 +495,21 @@ export function VoiceAssistant({ onTabChange, onOpenGroup }: VoiceAssistantProps
       setError(cause instanceof Error ? cause.message : 'Could not start voice input.')
       setTone('error')
     }
-  }, [clearTimers])
+  }, [clearTimers, groups, members])
 
   useSpeechRecognitionEvent('result', (event) => {
     const text = event.results?.[0]?.transcript?.trim() ?? ''
     if (!text) return
-    setTranscript(text)
     if (event.isFinal) {
-      listening.current = false
-      if (watchdog.current) clearTimeout(watchdog.current)
-      watchdog.current = null
-      setTone('processing')
-      handleRef.current(text)
+      const previous = heard.current
+      if (!previous) heard.current = text
+      else if (text.startsWith(previous)) heard.current = text
+      else if (!previous.endsWith(text)) heard.current = `${previous} ${text}`
+      partial.current = ''
+      setTranscript(heard.current)
+    } else {
+      partial.current = text
+      setTranscript(heard.current ? `${heard.current} ${text}` : text)
     }
   })
 
@@ -488,12 +528,30 @@ export function VoiceAssistant({ onTabChange, onOpenGroup }: VoiceAssistantProps
   })
 
   useSpeechRecognitionEvent('end', () => {
+    const wasListening = listening.current
     listening.current = false
     if (watchdog.current) {
       clearTimeout(watchdog.current)
       watchdog.current = null
     }
-    setTone((current) => (current === 'listening' ? 'idle' : current))
+
+    const text = (heard.current || partial.current).trim()
+    if (!wasListening || processed.current) {
+      setTone((current) => (current === 'listening' ? 'idle' : current))
+      return
+    }
+    if (!text) {
+      setTone('idle')
+      setError('I did not catch that. Tap the mic and try again.')
+      return
+    }
+
+    processed.current = true
+    heard.current = text
+    partial.current = ''
+    setTranscript(text)
+    setTone('processing')
+    handleRef.current(text)
   })
 
   useEffect(
@@ -622,9 +680,10 @@ export function VoiceAssistant({ onTabChange, onOpenGroup }: VoiceAssistantProps
           />
         ) : null}
         <PressableScale
-          onPress={busy ? stop : start}
+          onPress={tone === 'listening' ? stopAndProcess : start}
+          disabled={tone === 'processing'}
           scaleTo={0.92}
-          accessibilityLabel={busy ? 'Stop listening' : 'Start voice command'}
+          accessibilityLabel={tone === 'listening' ? 'I am done speaking' : 'Start voice command'}
         >
           <LinearGradient
             colors={tone === 'listening' ? gradients.coral : gradients.violet}

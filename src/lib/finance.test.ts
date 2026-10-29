@@ -165,7 +165,7 @@ describe('balances', () => {
     expect(balances.find((b) => b.memberId === 'b')?.netPaise).toBe(-100)
   })
 
-  it('ignores unconfirmed settlements and applies confirmed ones', () => {
+  it('applies a recorded settlement immediately, before either side confirms', () => {
     const g = group(['a', 'b'])
     const e = expense({
       amountPaise: 100,
@@ -179,17 +179,37 @@ describe('balances', () => {
       to: 'a',
       amountPaise: 50,
       method: 'upi',
-      status: 'payer_confirmed',
+      status: 'pending',
       createdAt: 0,
       updatedAt: 0,
     }
-    const before = computeBalances({ group: g, expenses: [e], settlements: [pending] })
-    expect(before.find((b) => b.memberId === 'b')?.netPaise).toBe(-50)
-
-    const confirmed = { ...pending, status: 'confirmed' as const }
-    const after = computeBalances({ group: g, expenses: [e], settlements: [confirmed] })
+    const after = computeBalances({ group: g, expenses: [e], settlements: [pending] })
     expect(after.find((b) => b.memberId === 'b')?.netPaise).toBe(0)
     expect(after.find((b) => b.memberId === 'a')?.netPaise).toBe(0)
+    expect(isReconciled(after)).toBe(true)
+  })
+
+  it('reverses a settlement that has been disputed', () => {
+    const g = group(['a', 'b'])
+    const e = expense({
+      amountPaise: 100,
+      payers: [{ memberId: 'a', amountPaise: 100 }],
+      split: { mode: 'equal', participants: ['a', 'b'] },
+    })
+    const disputed: Settlement = {
+      id: 's1',
+      groupId: 'g',
+      from: 'b',
+      to: 'a',
+      amountPaise: 50,
+      method: 'upi',
+      status: 'disputed',
+      createdAt: 0,
+      updatedAt: 0,
+    }
+    const balances = computeBalances({ group: g, expenses: [e], settlements: [disputed] })
+    expect(balances.find((b) => b.memberId === 'b')?.netPaise).toBe(-50)
+    expect(balances.find((b) => b.memberId === 'a')?.netPaise).toBe(50)
   })
 
   it('ignores soft-deleted expenses', () => {

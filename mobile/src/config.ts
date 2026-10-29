@@ -15,4 +15,4 @@ export const APP_VERSION_NAME = process.env.EXPO_PUBLIC_VERSION_NAME ?? '2.0.0'
 export const RELEASE_CHANNEL = process.env.EXPO_PUBLIC_CHANNEL ?? 'stable'
 
 /** The installed app's version, shown in settings. */
-export const APP_LABEL = `${APP_VERSION_NAME} (${APP_VERSION_CODE})`
+export const APP_LABEL = APP_VERSION_NAME

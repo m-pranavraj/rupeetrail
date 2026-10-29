@@ -43,10 +43,22 @@ const MODES: { value: SplitMode; label: string }[] = [
   { value: 'shares', label: 'Shares' },
 ]
 
-function noonOf(ts: number): number {
+function dayOf(ts: number): number {
   const date = new Date(ts)
-  date.setHours(12, 0, 0, 0)
+  date.setHours(0, 0, 0, 0)
   return date.getTime()
+}
+
+/** Keep the clock time, swap the calendar day. */
+function withTimeOf(day: number, reference: number): number {
+  const target = new Date(day)
+  const clock = new Date(reference)
+  target.setHours(clock.getHours(), clock.getMinutes(), clock.getSeconds(), 0)
+  return target.getTime()
+}
+
+function shiftMinutes(ts: number, minutes: number): number {
+  return ts + minutes * 60_000
 }
 
 function dayLabel(offset: number): string {
@@ -90,7 +102,7 @@ export function ExpenseForm({
   const [description, setDescription] = useState(expense?.description ?? '')
   const [category, setCategory] = useState<ExpenseCategory>(expense?.category ?? 'food')
   const [notes, setNotes] = useState(expense?.notes ?? '')
-  const [date, setDate] = useState(() => noonOf(expense?.date ?? Date.now()))
+  const [date, setDate] = useState(() => expense?.date ?? Date.now())
   const [tagPlace, setTagPlace] = useState(!expense || !hasPlace)
 
   const [payerIds, setPayerIds] = useState<string[]>(
@@ -517,10 +529,15 @@ export function ExpenseForm({
             <Label>When</Label>
             <View style={styles.chipRow}>
               {QUICK_DAYS.map((offset) => {
-                const ts = noonOf(Date.now() - offset * 86_400_000)
-                const active = Math.abs(date - ts) < 60_000
+                const day = new Date()
+                day.setDate(day.getDate() - offset)
+                const active = dayOf(date) === dayOf(day.getTime())
                 return (
-                  <PressableScale key={offset} onPress={() => setDate(ts)} scaleTo={0.94}>
+                  <PressableScale
+                    key={offset}
+                    onPress={() => setDate(withTimeOf(day.getTime(), date))}
+                    scaleTo={0.94}
+                  >
                     <View style={[styles.chip, active && styles.chipActive]}>
                       <Text style={[styles.chipText, active && { color: colors.accentInk }]}>
                         {dayLabel(offset)}
@@ -530,13 +547,44 @@ export function ExpenseForm({
                 )
               })}
             </View>
-            <Muted small>
-              {new Date(date).toLocaleDateString('en-IN', {
-                weekday: 'long',
-                day: 'numeric',
-                month: 'long',
-              })}
-            </Muted>
+
+            <View style={styles.timeRow}>
+              <View style={styles.timeInfo}>
+                <Ionicons name="time-outline" size={16} color={colors.accent} />
+                <View>
+                  <Text style={styles.timeValue}>
+                    {new Date(date).toLocaleTimeString('en-IN', {
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    })}
+                  </Text>
+                  <Muted small>
+                    {new Date(date).toLocaleDateString('en-IN', {
+                      weekday: 'long',
+                      day: 'numeric',
+                      month: 'long',
+                    })}
+                  </Muted>
+                </View>
+              </View>
+              <View style={styles.timeActions}>
+                <PressableScale onPress={() => setDate(shiftMinutes(date, -15))} scaleTo={0.92}>
+                  <View style={styles.timeStep}>
+                    <Text style={styles.timeStepText}>−15m</Text>
+                  </View>
+                </PressableScale>
+                <PressableScale onPress={() => setDate(shiftMinutes(date, 15))} scaleTo={0.92}>
+                  <View style={styles.timeStep}>
+                    <Text style={styles.timeStepText}>+15m</Text>
+                  </View>
+                </PressableScale>
+                <PressableScale onPress={() => setDate(Date.now())} scaleTo={0.92}>
+                  <View style={[styles.timeStep, styles.timeNow]}>
+                    <Text style={[styles.timeStepText, { color: colors.accentInk }]}>Now</Text>
+                  </View>
+                </PressableScale>
+              </View>
+            </View>
           </View>
 
           <Field
@@ -616,6 +664,32 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   chipMint: { backgroundColor: tints.accent.fill, borderColor: tints.accent.border },
   chipText: { color: colors.muted, fontSize: 12.5, fontWeight: '700' },
+
+  timeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing(2),
+    marginTop: spacing(3),
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderSoft,
+    borderRadius: radius.md,
+    padding: spacing(3),
+  },
+  timeInfo: { flexDirection: 'row', alignItems: 'center', gap: spacing(2) },
+  timeValue: { color: colors.text, fontSize: 16, fontWeight: '800', letterSpacing: -0.3 },
+  timeActions: { flexDirection: 'row', alignItems: 'center', gap: spacing(1.5) },
+  timeStep: {
+    paddingHorizontal: spacing(2.4),
+    paddingVertical: spacing(1.6),
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceAlt,
+  },
+  timeStepText: { color: colors.muted, fontSize: 11, fontWeight: '800' },
+  timeNow: { backgroundColor: colors.accent, borderColor: colors.accent },
 
   payerBox: {
     marginTop: spacing(2.5),

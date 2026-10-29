@@ -100,6 +100,8 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   const sessionRef = useRef<StoredSession | null>(null)
   const activeRef = useRef<ActiveGroup | null>(null)
   const socketRef = useRef<{ close: () => void } | null>(null)
+  const refreshing = useRef(false)
+  const inForeground = useRef(true)
 
   const applySession = useCallback((next: StoredSession | null) => {
     sessionRef.current = next
@@ -287,7 +289,15 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
         onLedger: () => {
           void api
             .fetchGroup(groupId, membership)
-            .then((fresh) => setActive((prev) => (prev ? { ...prev, snapshot: fresh } : prev)))
+            .then((fresh) =>
+              setActive((prev) =>
+                prev && prev.snapshot.revision === fresh.revision
+                  ? prev
+                  : prev
+                    ? { ...prev, snapshot: fresh }
+                    : prev,
+              ),
+            )
             .catch(() => undefined)
         },
         onStatus: (live) => setActive((prev) => (prev ? { ...prev, live } : prev)),
@@ -308,12 +318,19 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
 
   const refresh = useCallback<Store['refresh']>(async () => {
     const current = activeRef.current
-    if (!current) return
+    if (!current || refreshing.current) return
+    refreshing.current = true
     try {
       const snapshot = await api.fetchGroup(current.membership.groupId, current.membership)
-      setActive((prev) => (prev ? { ...prev, snapshot } : prev))
+      // A no-op sync must not re-render the whole ledger: on a big group that
+      // reads as a stutter every few seconds.
+      setActive((prev) =>
+        prev && prev.snapshot.revision === snapshot.revision ? prev : prev ? { ...prev, snapshot } : prev,
+      )
     } catch (cause) {
       fail(cause)
+    } finally {
+      refreshing.current = false
     }
   }, [fail])
 
@@ -508,21 +525,23 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   // Pull the ledger when the app comes back to the foreground.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
+      inForeground.current = state === 'active'
       if (state === 'active') void refresh()
     })
     return () => sub.remove()
   }, [refresh])
 
-  // Keep the open ledger fresh only when the socket cannot attach (some
-  // networks block WebSockets). While the socket is live its broadcasts are
-  // the source of truth, so there is no periodic polling.
+  // When the socket cannot attach (some networks block WebSockets, or the
+  // deployment has no realtime binding) fall back to a fast foreground sync so
+  // another phone's entry lands almost immediately. Nothing runs while the app
+  // is in the background, and overlapping fetches are skipped.
   const openGroupId = active?.membership.groupId
   const openLive = active?.live
   useEffect(() => {
     if (!openGroupId || openLive === 'live') return
     const timer = setInterval(() => {
-      void refresh()
-    }, 12_000)
+      if (inForeground.current) void refresh()
+    }, 2_000)
     return () => clearInterval(timer)
   }, [openGroupId, openLive, refresh])
 

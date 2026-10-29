@@ -23,9 +23,11 @@ interface BalanceInput {
  *
  * A positive net means the group owes that member money.
  *
- * Settlements are counted even when one party is not in the group — we use a
- * stable synthetic id (manual:from:<slug> / manual:to:<slug>) so the ledger
- * still reflects money that actually moved.
+ * A recorded settlement moves the balance immediately, whether or not the
+ * other phone has tapped confirm yet. Confirmation is an audit trail; only a
+ * dispute (a claim that the money never moved) reverses the effect. Manual
+ * counterparties use a stable synthetic id (manual:from:<slug> /
+ * manual:to:<slug>) so money paid to someone outside the group still counts.
  */
 export function computeBalances({ group, expenses, settlements }: BalanceInput): MemberBalance[] {
   const members = group.members
@@ -80,24 +82,11 @@ export function computeBalances({ group, expenses, settlements }: BalanceInput):
     }
   }
 
-  // Settlements count as soon as they are recorded. A settlement is
-  // "effective" when either:
-  //   • it is fully confirmed by both parties
-  //   • it involves a manual (non-app) party from whom the current user
-  //     can never get a counter-confirmation
-  //
-  // This makes the balance update immediately for manual payments.
+  // Every recorded settlement counts immediately. Two people can still confirm
+  // it for the audit trail, and a dispute removes it again, but nobody has to
+  // wait for a second phone before their balance reflects money that moved.
   for (const s of settlements) {
     if (s.status === 'disputed') continue
-    const fromIsManual = s.from.startsWith('manual:')
-    const toIsManual = s.to.startsWith('manual:')
-    // A manual-party settlement is always effective; fully-in-group ones
-    // require both sides to confirm before counting.
-    const effective = s.status === 'confirmed' || fromIsManual || toIsManual
-    if (!effective) continue
-
-    const syntheticFrom = s.from.startsWith('manual:')
-    const syntheticTo = s.to.startsWith('manual:')
 
     if (!byId.has(s.from)) {
       byId.set(s.from, {

@@ -99,7 +99,11 @@ export function connectGroup({ groupId, credentials, onLedger, onStatus }: Optio
       onStatus('offline')
       attempt += 1
       const status = (error as { status?: number }).status
-      schedule(status === 401 || status === 403 ? 30_000 : Math.min(20_000, 800 * 2 ** attempt))
+      if (status === 401 || status === 403) schedule(30_000)
+      // 503 means this deployment has no realtime binding; the fast sync loop
+      // already covers updates, so probe again only occasionally.
+      else if (status === 503) schedule(120_000)
+      else schedule(Math.min(20_000, 800 * 2 ** attempt))
     }
   }
 

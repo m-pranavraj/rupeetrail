@@ -85,6 +85,7 @@ interface CallOptions {
   body?: unknown
   auth?: Credentials
   userToken?: string | null
+  origin?: string
   timeoutMs?: number
 }
 
@@ -96,6 +97,9 @@ async function call<T>(path: string, options: CallOptions = {}): Promise<T> {
     headers['x-rt-token'] = options.auth.token
   }
   if (options.userToken) headers['x-rt-user'] = options.userToken
+  // React Native does not add an Origin to fetch calls; the realtime ticket
+  // endpoint validates that the caller is a browser/app on an allowed origin.
+  if (options.origin) headers.origin = options.origin
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000)
@@ -308,7 +312,12 @@ export function confirmSettlement(
 }
 
 export function realtimeTicket(auth: Credentials, room: string): Promise<Ticket> {
-  return call<Ticket>('/api/realtime/ticket', { method: 'POST', auth, body: { room } })
+  return call<Ticket>('/api/realtime/ticket', {
+    method: 'POST',
+    auth,
+    body: { room },
+    origin: API_BASE.replace(/^ws/i, 'http'),
+  })
 }
 
 /* --------------------------------------------------------------- releases */

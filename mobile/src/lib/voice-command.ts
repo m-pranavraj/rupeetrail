@@ -20,6 +20,7 @@ export type AiCommand =
       participantIds: string[]
       payerId: string
       notes: string
+      category?: string
       splitValues?: Record<string, number>
     }
   | { type: 'delete_expense'; expenseId: string; groupId: string }
@@ -72,21 +73,251 @@ interface Member {
 
 /* --------------------------------------------------------------- helpers */
 
+/** Edit distance, capped so two long names cannot dominate. */
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0
+  if (!a.length) return b.length
+  if (!b.length) return a.length
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index)
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i]
+    for (let j = 1; j <= b.length; j += 1) {
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      )
+    }
+    previous = current
+  }
+  return previous[b.length]
+}
+
+function firstName(name: string): string {
+  return name.trim().toLowerCase().split(/\s+/)[0] ?? ''
+}
+
+/**
+ * Resolve a spoken name to a group member.
+ *
+ * Speech recognition rarely spells an Indian name exactly, so this accepts the
+ * full name, the first name, a prefix, and a small edit distance ("arjan" for
+ * "arjun"). Everything is normalised to letters before comparing.
+ */
+export function findMember(name: string, members: Member[]): Member | undefined {
+  const n = name.trim().toLowerCase().replace(/[^a-z\s'-]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!n) return undefined
+  const exact = members.find((m) => m.name.trim().toLowerCase() === n)
+  if (exact) return exact
+  const byFirst = members.find((m) => firstName(m.name) === firstName(n))
+  if (byFirst) return byFirst
+  const prefix = members.find((m) => {
+    const first = firstName(m.name)
+    const spoken = firstName(n)
+    return spoken.length >= 3 && (first.startsWith(spoken) || spoken.startsWith(first))
+  })
+  if (prefix) return prefix
+
+  let best: { member: Member; score: number } | null = null
+  for (const member of members) {
+    const spoken = n.split(/\s+/)[0]
+    const full = member.name.toLowerCase()
+    const first = firstName(member.name)
+    const distance = Math.min(levenshtein(spoken, first), levenshtein(n, full))
+    const span = Math.max(spoken.length, first.length, 1)
+    const score = 1 - distance / span
+    if (!best || score > best.score) best = { member, score }
+  }
+  return best && best.score >= 0.7 ? best.member : undefined
+}
+
 /** Resolve a spoken name to a member id from the group roster. */
 export function resolveName(name: string, members: Member[]): string | undefined {
-  const n = name.trim().toLowerCase()
-  if (!n) return undefined
-  const exact = members.find((m) => m.name.toLowerCase() === n)
-  if (exact) return exact.id
-  const first = members.find(
-    (m) => m.name.toLowerCase().split(/\s+/)[0] === n.split(/\s+/)[0],
+  return findMember(name, members)?.id
+}
+
+/* ------------------------------------------------------- spoken numbers */
+
+const NUMBER_WORDS: Record<string, number> = {
+  zero: 0,
+  oh: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
+  // Hinglish numbers. Ambiguous English homophones (do, bees, das) are
+  // deliberately omitted so "what do I owe" is not read as a number.
+  ek: 1,
+  teen: 3,
+  chaar: 4,
+  panch: 5,
+  paanch: 5,
+  chhe: 6,
+  saat: 7,
+  aath: 8,
+  pachas: 50,
+  pachaas: 50,
+  sau: 100,
+}
+
+const MULTIPLIERS: Record<string, number> = {
+  hundred: 100,
+  thousand: 1_000,
+  hazaar: 1_000,
+  hajar: 1_000,
+  lakh: 100_000,
+  lakhs: 100_000,
+}
+
+/**
+ * Fold spoken numbers into digits: "five hundred" → "500",
+ * "one thousand two hundred fifty six" → "1256", "do sau" → "200",
+ * "twelve fifty" → "1250". Only runs of number words are touched, so
+ * "someone" or "two ate" keep their meaning.
+ */
+export function foldNumberWords(text: string): string {
+  const words = [...Object.keys(NUMBER_WORDS), ...Object.keys(MULTIPLIERS)].sort(
+    (a, b) => b.length - a.length,
   )
-  if (first) return first.id
-  return members.find(
-    (m) =>
-      m.name.toLowerCase().includes(n) ||
-      n.includes(m.name.toLowerCase().split(/\s+/)[0]),
-  )?.id
+  const pattern = new RegExp(`\\b(?:${words.join('|')}|and)\\b`, 'gi')
+  const matches: { start: number; end: number; word: string }[] = []
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(text)) !== null) {
+    matches.push({ start: match.index, end: match.index + match[0].length, word: match[0].toLowerCase() })
+  }
+  if (matches.length === 0) return text
+
+  const groups: { start: number; end: number; words: string[] }[] = []
+  for (const hit of matches) {
+    const last = groups[groups.length - 1]
+    if (last && /^\s*(?:and\s+)?$/i.test(text.slice(last.end, hit.start))) {
+      last.end = hit.end
+      last.words.push(hit.word)
+    } else {
+      groups.push({ start: hit.start, end: hit.end, words: [hit.word] })
+    }
+  }
+
+  let result = text
+  for (const group of [...groups].reverse()) {
+    const numeric = group.words.filter((word) => word !== 'and')
+    if (numeric.length === 0) continue
+    // A single "and" between number words is filler, not a number.
+    if (numeric.every((word) => word === 'and')) continue
+    let total = 0
+    let current = 0
+    const small: number[] = []
+    for (const word of numeric) {
+      const multiplier = MULTIPLIERS[word]
+      if (multiplier) {
+        if (multiplier >= 1_000) {
+          total += (current || 1) * multiplier
+          current = 0
+        } else {
+          current = (current || 1) * multiplier
+        }
+        small.push(current)
+        continue
+      }
+      const value = NUMBER_WORDS[word]
+      if (value === undefined) continue
+      if (small.length === 0) small.push(value)
+      current += value
+    }
+    let value = total + current
+    const plain = numeric.filter((word) => !MULTIPLIERS[word])
+    if (
+      total === 0 &&
+      plain.length === 2 &&
+      NUMBER_WORDS[plain[0]] >= 10 &&
+      NUMBER_WORDS[plain[0]] <= 99 &&
+      NUMBER_WORDS[plain[1]] >= 10 &&
+      NUMBER_WORDS[plain[1]] <= 99 &&
+      !numeric.some((word) => MULTIPLIERS[word])
+    ) {
+      // "twelve fifty" is how Indians read 1250.
+      value = NUMBER_WORDS[plain[0]] * 100 + NUMBER_WORDS[plain[1]]
+    }
+    result = `${result.slice(0, group.start)}${value}${result.slice(group.end)}`
+  }
+  return result
+}
+
+/**
+ * Normalise the way people actually dictate: Hinglish verbs, spoken numbers,
+ * "rupaye" and filler words. The output keeps the original sentence order so
+ * the description logic can still use it.
+ */
+export function prepareTranscript(raw: string): string {
+  let text = ` ${raw.replace(/\s+/g, ' ').trim()} `
+  text = text
+    // Hindi "do" (two) is ambiguous in English, so it is only folded next to a
+    // multiplier or "sau": "do sau" → 200, while "what do I owe" is untouched.
+    .replace(/\bdo\s+sau\b/gi, '200')
+    .replace(/\bdo\s+(hazaar|hajar|thousand)\b/gi, '2000')
+    .replace(/\b(?:maine|humne)\b/gi, (match) => (/hum/i.test(match) ? ' we ' : ' i '))
+    // "main" is only "I" when a payment verb follows — "main course" is food.
+    .replace(
+      /(^|[,;]\s*)main(?=\s+(?:ne|paid|pay|diya|diye|bhara|kharcha|kharch|spent|gave|sent)\b)/gi,
+      '$1i',
+    )
+    .replace(/\b([a-z][a-z'-]+)\s+ne\b/gi, '$1 paid')
+    .replace(/\b(?:diya|diye|di|bhara|bhar diya|pay kiya|kiya|karta|karti|kharcha|kharch)\b/gi, ' ')
+    .replace(/\b(?:ke liye|liye|ke waste)\b/gi, ' for ')
+    .replace(/\b(?:rupaye|rupay|rupaiya|paise|paisa)\b/gi, ' rupees ')
+    .replace(/\b(?:wala|wali|wale)\b/gi, ' ')
+    .replace(/\b(?:hum sab|sab log|sabne|sabhi|sab)\b/gi, ' everyone ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return foldNumberWords(text)
+}
+
+/** "pani puri" → "Pani Puri", preserving already-capitalised words. */
+function titleize(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\b[a-z]/g, (letter) => letter.toUpperCase())
+}
+
+/** Map a spoken description to one of the app's categories. */
+export function inferCategory(text: string): string {
+  const t = text.toLowerCase()
+  if (/puri|chai|tea|coffee|dinner|lunch|breakfast|food|khana|nashta|samosa|biryani|pizza|burger|restaurant|cafe|meal|snack|beer|drink|pani/.test(t)) {
+    return 'food'
+  }
+  if (/cab|taxi|auto|uber|ola|petrol|diesel|fuel|toll|parking|train|flight|bus|travel|ticket/.test(t)) {
+    return 'travel'
+  }
+  if (/hotel|stay|room|resort|hostel|rent/.test(t)) return 'stay'
+  if (/grocery|groceries|vegetable|supermarket|kirana/.test(t)) return 'groceries'
+  if (/movie|cinema|game|concert|party|club|entertainment/.test(t)) return 'entertainment'
+  if (/electricity|wifi|internet|recharge|bill|gas|water|utility/.test(t)) return 'utilities'
+  if (/shopping|clothes|shirt|dress|gift|shoes/.test(t)) return 'shopping'
+  return 'other'
 }
 
 /** Parse a rupee amount: "1256", "1.2k", "12 hundred", "500 rupees". */
@@ -138,20 +369,37 @@ interface NamedAmount {
   amountPaise: number
 }
 
-/** "Priya 250", "Rahul had 300", "Priya ate 250" → named shares. */
-function extractNamedAmounts(text: string, members: Member[]): NamedAmount[] {
+/**
+ * "Priya 250", "Rahul had 300", "Priya ate 250" → named shares.
+ *
+ * The name must sit next to the amount (or the clause must use a share verb),
+ * and the payer is excluded: "arjun paid 500 for pranav" is one payer talking
+ * about one person's spend, not two people sharing 500 each.
+ */
+function extractNamedAmounts(
+  text: string,
+  members: Member[],
+  excludeIds: Set<string> = new Set(),
+): NamedAmount[] {
   const results: NamedAmount[] = []
   const clauses = text.split(/[,;.\n]+/).map((clause) => clause.trim()).filter(Boolean)
   for (const clause of clauses) {
+    if (/\b(?:paid|sent|gave|transferred)\s+by\b|\b(?:i|we)\s+paid\b/i.test(clause)) continue
     const mentioned = members.filter((member) => {
-      const first = member.name.toLowerCase().split(/\s+/)[0]
+      if (excludeIds.has(member.id)) return false
+      const first = firstName(member.name)
       if (!first || first.length < 2) return false
       return new RegExp(`\\b${escapeRegex(first)}\\b`, 'i').test(clause)
     })
     if (mentioned.length === 0) continue
+    const shareVerb = /\b(?:ate|eat|had|took|takes|spent|share|shares|owes?|part|portion)\b/i.test(clause)
     for (const hit of amountsIn(clause)) {
       if (hit.value < 100) continue
       for (const member of mentioned) {
+        const position = clause.toLowerCase().indexOf(firstName(member.name))
+        const distance = Math.abs(hit.index - position)
+        const near = distance <= 18 || shareVerb
+        if (!near) continue
         if (!results.some((entry) => entry.name === member.name)) {
           results.push({ name: member.name, amountPaise: hit.value })
         }
@@ -292,13 +540,14 @@ export function parseVoiceCommand(
   transcript: string,
   context: VoiceCommandContext,
 ): AiCommandResult {
-  const t = transcript.trim()
+  const raw = transcript.trim()
+  const t = prepareTranscript(raw)
   const lower = t.toLowerCase()
   const members = context.members
   const groups = context.groups
   const groupId = context.currentGroupId
 
-  if (!t) {
+  if (!raw) {
     return { ok: false, reply: 'Say a command, like “Dinner 1200 split between us”.' }
   }
 
@@ -314,11 +563,11 @@ export function parseVoiceCommand(
   // ---- Create a group ---------------------------------------------------
   if (/\b(?:create|make|start|begin|set\s*up|open)\s+(?:a\s+)?(?:new\s+)?(?:group|trip|expense\s*group|split\s*group|dinner\s*group)\b/.test(lower)) {
     let name = 'New Group'
-    const named = t.match(/\b(?:called|named|for)\s+(.+)$/i)
+    const named = raw.match(/\b(?:called|named|for)\s+(.+)$/i)
     if (named) {
       name = cleanGroupName(named[1])
     } else {
-      const tail = t.match(/\b(?:group|trip)\s+(.+)$/i)
+      const tail = raw.match(/\b(?:group|trip)\s+(.+)$/i)
       if (tail) name = cleanGroupName(tail[1])
     }
     return {
@@ -476,6 +725,164 @@ export function parseVoiceCommand(
 
 /* --------------------------------------------------------------- expense */
 
+interface PayerInfo {
+  id: string
+  name: string
+  explicit: boolean
+}
+
+const PAY_VERB = '(?:paid|pay|spent|sent|gave|transferred|covered|bought|treated)'
+
+/**
+ * Who put the money down?
+ *
+ * Handles "paid by Arjun", "Arjun paid 500", "I paid", and defaults to the
+ * speaker. The payer is excluded from the share set — "Arjun paid 500 for
+ * Pranav" is one bill for Pranav, not two people splitting it.
+ */
+function extractPayer(
+  text: string,
+  members: Member[],
+  context: VoiceCommandContext,
+): PayerInfo {
+  const me = members.find((member) => member.id === context.myId)
+  const fallback: PayerInfo = {
+    id: context.myId,
+    name: me?.name ?? context.myName,
+    explicit: false,
+  }
+
+  const byMatch = text.match(
+    new RegExp(`\\b${PAY_VERB}\\s+(?:[^,.;]{0,32}?\\s+)?by\\s+([A-Za-z][A-Za-z' -]{1,30})`, 'i'),
+  )
+  if (byMatch) {
+    const member = findMember(byMatch[1].split(/\s+/).slice(0, 3).join(' '), members)
+    if (member) return { id: member.id, name: member.name, explicit: true }
+  }
+
+  // Scan the sentence for a roster name sitting just before a payment verb.
+  // Names are matched fuzzily, so "arjan paid" still lands on Arjun.
+  for (const hit of text.matchAll(/[A-Za-z][A-Za-z'’-]*/g)) {
+    const member = findMember(hit[0], members)
+    if (!member) continue
+    const rest = text.slice((hit.index ?? 0) + hit[0].length)
+    if (new RegExp(`^[^,.;]{0,18}\\b${PAY_VERB}\\b`, 'i').test(rest)) {
+      return { id: member.id, name: member.name, explicit: true }
+    }
+  }
+
+  return fallback
+}
+
+/**
+ * Beneficiaries are the people the money was spent *for*:
+ * "for Pranav", "to Priya", "Pranav's share", "for me", "for everyone".
+ * A stated per-person amount ("Priya ate 250") is a share, not a beneficiary,
+ * and is handled by extractNamedAmounts instead.
+ */
+function extractBeneficiaries(
+  text: string,
+  members: Member[],
+  payer: PayerInfo,
+  context: VoiceCommandContext,
+): Member[] {
+  const lower = text.toLowerCase()
+  const found: Member[] = []
+  const seen = new Set<string>(payer.explicit ? [payer.id] : [])
+  const add = (member: Member | undefined) => {
+    if (!member || seen.has(member.id)) return
+    seen.add(member.id)
+    found.push(member)
+  }
+
+  if (/\b(?:for|to)\s+(?:everyone|everybody|all|us|we|the\s+group|the\s+trip|sab)\b/i.test(lower)) {
+    for (const member of members) add(member)
+    return found
+  }
+
+  if (/\b(?:for|to)\s+(?:me|myself)\b/i.test(lower)) {
+    add(members.find((member) => member.id === context.myId))
+  }
+
+  // "for Priya and Arjun" is one scope with two names, so the whole chunk is
+  // scanned instead of requiring the keyword to sit immediately before a name.
+  const scopeChunks = [...text.matchAll(/\b(?:for|to)\s+([^,;.\n]+)/gi)].map((match) =>
+    match[1].toLowerCase(),
+  )
+
+  for (const member of members) {
+    if (seen.has(member.id)) continue
+    const first = firstName(member.name)
+    if (first.length < 2) continue
+    const names = [escapeRegex(member.name.toLowerCase()), escapeRegex(first)].join('|')
+    const inScope = scopeChunks.some((chunk) => new RegExp(`\\b(?:${names})\\b`, 'i').test(chunk))
+    const possessive = new RegExp(
+      `\\b(?:${names})['’]s\\s+(?:share|shares|part|portion|meal|food|tickets?|room)\\b`,
+      'i',
+    ).test(lower)
+    if (inScope || possessive) add(member)
+  }
+
+  return found
+}
+
+const DESCRIPTION_NOISE =
+  /^(?:i|we|me|my|us|it|this|that|the|a|an|and|for|to|by|of|on|at|paid|pay|spent|split|share|between|among|equally|equal|each|everyone|everybody|someone|somebody|all|group|trip|rest|please|rupees|rs|only|bill|total|amount|expense|cost)$/i
+
+function cleanDescription(value: string, members: Member[]): string {
+  let text = ` ${value} `
+  for (const member of members) {
+    for (const name of [member.name, firstName(member.name)]) {
+      if (name.length < 2) continue
+      text = text.replace(new RegExp(`\\b${escapeRegex(name)}\\b`, 'gi'), ' ')
+    }
+  }
+  return text
+    .replace(/\b(?:paid|pay|spent|sent|gave|transferred|covered|bought|treated)\b/gi, ' ')
+    .replace(/\b(?:split|between|among|with|equally|equal|each|people?|persons?|of us)\b/gi, ' ')
+    .replace(/\b(?:everyone|everybody|all|the rest|rest|and|please|only|gst|tax)\b/gi, ' ')
+    .replace(/\b(?:for|to|by|from|of|on|at|with|in)\b/gi, ' ')
+    .replace(/\b(?:rupees?|rs\.?|me|us|we|i|them|him|her|someone|somebody)\b/gi, ' ')
+    .replace(/\b\d+(?:\.\d+)?\b/g, ' ')
+    .replace(/[^a-z0-9\s'&-]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(?:the|a|an)\s+/i, '')
+    .trim()
+}
+
+/**
+ * Read the what-for of the bill.
+ *
+ * "Arjun paid 500 for Pranav for pani puri" and "pani puri 500" both become
+ * "Pani Puri". Party names, payer verbs, split wording and numbers are stripped
+ * before the phrase is accepted, so a misheard name never becomes the title.
+ */
+function extractDescription(text: string, members: Member[]): string {
+  const candidates: string[] = []
+
+  for (const match of text.matchAll(/\b(?:for|on|at)\s+([^,;.\n]+)/gi)) {
+    candidates.push(match[1])
+  }
+
+  const firstNumber = text.search(/\d/)
+  if (firstNumber > 0) candidates.push(text.slice(0, firstNumber))
+
+  const numbers = [...text.matchAll(/\d+(?:\.\d+)?/g)]
+  const lastNumber = numbers[numbers.length - 1]
+  if (lastNumber?.index !== undefined) {
+    candidates.push(text.slice(lastNumber.index + lastNumber[0].length))
+  }
+
+  for (const candidate of candidates) {
+    const cleaned = cleanDescription(candidate, members)
+    if (cleaned.length < 2 || !/[a-z]{2}/i.test(cleaned)) continue
+    if (DESCRIPTION_NOISE.test(cleaned)) continue
+    return titleize(cleaned.slice(0, 60))
+  }
+  return ''
+}
+
 function parseExpense(
   t: string,
   lower: string,
@@ -509,8 +916,11 @@ function parseExpense(
     }
   }
 
+  const payer = extractPayer(t, members, context)
+  const beneficiaries = extractBeneficiaries(t, members, payer, context)
+
   const countGroups = extractCountGroups(lower)
-  const namedShares = extractNamedAmounts(t, members)
+  const namedShares = extractNamedAmounts(t, members, new Set([payer.id]))
 
   if (totalAmount === null) {
     // No headline total: sum whatever shares were stated.
@@ -532,36 +942,27 @@ function parseExpense(
   }
 
   // ---- Description -----------------------------------------------------
-  let description = 'Expense'
-  const descMatch = t.match(/^([A-Za-z][\w\s'-]{2,50}?)(?:\s+\d|,)/)
-  if (
-    descMatch &&
-    !/^(bill|total|amount|split|the|a|an|my|all|each|between|among|for|add|expense)$/i.test(
-      descMatch[1].trim(),
-    )
-  ) {
-    description = descMatch[1].trim()
-  } else {
-    const parts = t.split(/[,;.]/).map((part) => part.trim()).filter(Boolean)
-    for (const part of parts) {
-      if (/[0-9]/.test(part)) continue
-      if (
-        part.length > 3 &&
-        /[A-Za-z]/.test(part[0]) &&
-        !/^(split|between|among|for|all|the|and|gst|tax|rupees?|add|expense)/i.test(part)
-      ) {
-        description = part.slice(0, 60)
-        break
-      }
-    }
-  }
+  const description = extractDescription(t, members) || 'Expense'
 
   // ---- Split -----------------------------------------------------------
   let splitMode: 'equal' | 'exact' | 'percent' = 'equal'
   let participantIds = members.map((member) => member.id)
   let splitValues: Record<string, number> | undefined
 
-  if (namedShares.length > 0) {
+  if (beneficiaries.length > 0) {
+    // "Arjun paid 500 for Pranav" — one bill, one beneficiary.
+    splitMode = 'exact'
+    const values: Record<string, number> = {}
+    const each = Math.floor(totalAmount / beneficiaries.length)
+    let assigned = 0
+    beneficiaries.forEach((member, index) => {
+      const share = index === beneficiaries.length - 1 ? totalAmount - assigned : each
+      values[member.id] = share
+      assigned += share
+    })
+    participantIds = Object.keys(values)
+    splitValues = values
+  } else if (namedShares.length > 0) {
     splitMode = 'exact'
     const values: Record<string, number> = {}
     const assigned = new Set<string>()
@@ -652,12 +1053,21 @@ function parseExpense(
 
   const detail =
     splitMode === 'exact' && splitValues
-      ? `exact split (${Object.entries(splitValues)
-          .map(([id, paise]) => `${members.find((m) => m.id === id)?.name ?? id} ₹${(paise / 100).toFixed(0)}`)
-          .join(', ')})`
+      ? Object.entries(splitValues)
+          .map(
+            ([id, paise]) =>
+              `${members.find((m) => m.id === id)?.name ?? id} ₹${(paise / 100).toFixed(0)}`,
+          )
+          .join(', ')
       : splitMode === 'equal'
         ? `equally among ${participantIds.length} ${participantIds.length === 1 ? 'person' : 'people'}`
         : 'by percentage'
+
+  const payerLabel = payer.id === context.myId ? 'You paid' : `${payer.name} paid`
+  const scope =
+    beneficiaries.length > 0
+      ? `for ${beneficiaries.map((member) => member.name).join(', ')}`
+      : detail
 
   return {
     ok: true,
@@ -667,11 +1077,12 @@ function parseExpense(
       amountPaise: totalAmount,
       splitMode,
       participantIds,
-      payerId: context.myId,
+      payerId: payer.id,
       notes: gstNote,
+      category: inferCategory(`${description} ${t}`),
       splitValues,
     },
-    reply: `Add "${description}" for ₹${(totalAmount / 100).toFixed(2)} — ${detail}.`,
+    reply: `Add "${description}" for ₹${(totalAmount / 100).toFixed(2)} — ${payerLabel}, ${scope}.`,
   }
 }
 

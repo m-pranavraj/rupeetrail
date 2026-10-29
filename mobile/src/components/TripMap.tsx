@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { Image, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native'
-import { colors, radius, spacing } from '../theme'
+import { Ionicons } from '@expo/vector-icons'
+import { colors, isDark, radius, spacing } from '../theme'
 import { formatPaise } from '../lib/money'
 
 export interface MapPoint {
@@ -13,9 +14,16 @@ export interface MapPoint {
   count?: number
 }
 
+export interface MapHere {
+  lat: number
+  lng: number
+}
+
 const TILE = 256
 const MAX_ZOOM = 16
 const MIN_ZOOM = 3
+/** India, so the map always has a sensible view even with no permission. */
+const HOME: MapHere = { lat: 21.1458, lng: 79.0882 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
@@ -33,53 +41,70 @@ function latToY(lat: number, zoom: number): number {
  * A dependency-free slippy map.
  *
  * Native map SDKs need a Google key and a Play Services binary; a trip ledger
- * only needs to show "where the money went". This renders CARTO's dark raster
- * tiles (OpenStreetMap data, no key) and positions pins in world pixel space,
- * so the map works in any prebuild with no native module at all.
+ * only needs to show "where the money went". This renders CARTO raster tiles
+ * (OpenStreetMap data, no key) and positions pins in world pixel space, so the
+ * map works in any prebuild with no native module at all.
+ *
+ * The map is always visible: with no pins it centres on the phone's location
+ * (or India), so "tag a place" never leaves the user staring at an empty card.
  */
 export function TripMap({
   points,
+  here,
+  focusHere,
   height = 280,
   onPickPoint,
-  emptyHint = 'Tag expenses with a place and the trip map draws itself.',
+  emptyHint = 'No stops pinned yet — tag an expense and its pin lands here.',
 }: {
   points: MapPoint[]
+  here?: MapHere | null
+  focusHere?: boolean
   height?: number
   onPickPoint?: (id: string) => void
   emptyHint?: string
 }) {
   const [size, setSize] = useState({ width: 0, height })
+  const [zoomStep, setZoomStep] = useState(0)
 
   const layout = useMemo(() => {
     if (size.width <= 0) return null
     const usableWidth = size.width
     const usableHeight = size.height
 
-    const valid = points.filter(
+    const pins = points.filter(
       (point) => Number.isFinite(point.lat) && Number.isFinite(point.lng),
     )
-    if (valid.length === 0) return null
+    const showHere = Boolean(here) && (pins.length === 0 || focusHere)
+    const marks: { lat: number; lng: number }[] = pins.map((point) => ({
+      lat: point.lat,
+      lng: point.lng,
+    }))
+    if (showHere && here) marks.push(here)
 
-    let minLat = Math.min(...valid.map((p) => p.lat))
-    let maxLat = Math.max(...valid.map((p) => p.lat))
-    let minLng = Math.min(...valid.map((p) => p.lng))
-    let maxLng = Math.max(...valid.map((p) => p.lng))
+    if (marks.length === 0) marks.push(HOME)
+
+    let minLat = Math.min(...marks.map((point) => point.lat))
+    let maxLat = Math.max(...marks.map((point) => point.lat))
+    let minLng = Math.min(...marks.map((point) => point.lng))
+    let maxLng = Math.max(...marks.map((point) => point.lng))
 
     // A single stop needs a readable neighbourhood, not a country.
     if (Math.abs(maxLat - minLat) < 0.0008 && Math.abs(maxLng - minLng) < 0.0008) {
-      minLat -= 0.004
-      maxLat += 0.004
-      minLng -= 0.004
-      maxLng += 0.004
+      const pad = marks.length === 1 && marks[0] === HOME ? 6 : 0.004
+      minLat -= pad
+      maxLat += pad
+      minLng -= pad
+      maxLng += pad
     }
 
-    let zoom = MAX_ZOOM
-    for (; zoom > MIN_ZOOM; zoom -= 1) {
-      const w = Math.abs(lonToX(maxLng, zoom) - lonToX(minLng, zoom))
-      const h = Math.abs(latToY(minLat, zoom) - latToY(maxLat, zoom))
+    let fit = MAX_ZOOM
+    for (; fit > MIN_ZOOM; fit -= 1) {
+      const w = Math.abs(lonToX(maxLng, fit) - lonToX(minLng, fit))
+      const h = Math.abs(latToY(minLat, fit) - latToY(maxLat, fit))
       if (w <= usableWidth * 0.78 && h <= usableHeight * 0.7) break
     }
 
+    const zoom = clamp(fit + zoomStep, MIN_ZOOM, 17)
     const centerLat = (minLat + maxLat) / 2
     const centerLng = (minLng + maxLng) / 2
     const centerX = lonToX(centerLng, zoom)
@@ -92,6 +117,7 @@ export function TripMap({
     const firstY = Math.floor(top / TILE)
     const lastY = Math.floor((top + usableHeight) / TILE)
     const max = 2 ** zoom - 1
+    const style = isDark ? 'dark_all' : 'light_all'
 
     const tiles: { key: string; uri: string; x: number; y: number }[] = []
     for (let x = firstX; x <= lastX; x += 1) {
@@ -100,21 +126,26 @@ export function TripMap({
         const wrapped = ((x % (max + 1)) + (max + 1)) % (max + 1)
         tiles.push({
           key: `${zoom}-${x}-${y}`,
-          uri: `https://basemaps.cartocdn.com/dark_all/${zoom}/${wrapped}/${y}@2x.png`,
+          uri: `https://basemaps.cartocdn.com/${style}/${zoom}/${wrapped}/${y}@2x.png`,
           x: x * TILE - left,
           y: y * TILE - top,
         })
       }
     }
 
-    const pins = valid.map((point) => ({
-      ...point,
-      x: lonToX(point.lng, zoom) - left,
-      y: latToY(point.lat, zoom) - top,
-    }))
-
-    return { tiles, pins, zoom }
-  }, [points, size])
+    return {
+      tiles,
+      zoom,
+      herePin: here
+        ? { x: lonToX(here.lng, zoom) - left, y: latToY(here.lat, zoom) - top }
+        : null,
+      pins: pins.map((point) => ({
+        ...point,
+        x: lonToX(point.lng, zoom) - left,
+        y: latToY(point.lat, zoom) - top,
+      })),
+    }
+  }, [focusHere, here, points, size, zoomStep])
 
   const onLayout = (event: LayoutChangeEvent) => {
     const { width, height: measured } = event.nativeEvent.layout
@@ -124,10 +155,7 @@ export function TripMap({
   return (
     <View style={[styles.wrap, { height }]} onLayout={onLayout}>
       {!layout ? (
-        <View style={styles.empty}>
-          <Text style={styles.emptyIcon}>🗺️</Text>
-          <Text style={styles.emptyText}>{emptyHint}</Text>
-        </View>
+        <View style={styles.loading} />
       ) : (
         <>
           {layout.tiles.map((tile) => (
@@ -135,10 +163,21 @@ export function TripMap({
               key={tile.key}
               source={{ uri: tile.uri }}
               style={{ position: 'absolute', left: tile.x, top: tile.y, width: TILE, height: TILE }}
+              fadeDuration={120}
             />
           ))}
 
           <View style={styles.vignette} pointerEvents="none" />
+
+          {layout.herePin ? (
+            <View
+              style={[styles.hereWrap, { left: layout.herePin.x, top: layout.herePin.y }]}
+              pointerEvents="none"
+            >
+              <View style={styles.hereHalo} />
+              <View style={styles.hereDot} />
+            </View>
+          ) : null}
 
           {layout.pins.map((pin) => (
             <Pressable
@@ -161,9 +200,28 @@ export function TripMap({
             </Pressable>
           ))}
 
-          <View style={styles.zoomBadge}>
-            <Text style={styles.zoomText}>z{layout.zoom}</Text>
+          <View style={styles.zoomStack}>
+            <Pressable onPress={() => setZoomStep((step) => Math.min(3, step + 1))} hitSlop={6}>
+              <View style={styles.zoomButton}>
+                <Ionicons name="add" size={16} color={colors.text} />
+              </View>
+            </Pressable>
+            <Pressable onPress={() => setZoomStep((step) => Math.max(-6, step - 1))} hitSlop={6}>
+              <View style={styles.zoomButton}>
+                <Ionicons name="remove" size={16} color={colors.text} />
+              </View>
+            </Pressable>
           </View>
+
+          {layout.pins.length === 0 ? (
+            <View style={styles.hintBar} pointerEvents="none">
+              <Text style={styles.hintText} numberOfLines={2}>
+                {layout.herePin ? 'You are here. ' : ''}
+                {emptyHint}
+              </Text>
+            </View>
+          ) : null}
+
           <Text style={styles.attribution}>© OpenStreetMap · CARTO</Text>
         </>
       )}
@@ -179,23 +237,30 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.borderSoft,
   },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing(6) },
-  emptyIcon: { fontSize: 30, opacity: 0.85 },
-  emptyText: {
-    color: colors.muted,
-    fontSize: 12.5,
-    lineHeight: 18,
-    textAlign: 'center',
-    marginTop: spacing(2),
-    maxWidth: 260,
-  },
+  loading: { flex: 1, backgroundColor: colors.bgElevated },
   vignette: {
     position: 'absolute',
     top: 0,
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: 'rgba(7, 19, 15, 0.18)',
+    backgroundColor: isDark ? 'rgba(7, 19, 15, 0.2)' : 'rgba(255, 255, 255, 0.06)',
+  },
+  hereWrap: { position: 'absolute', alignItems: 'center', justifyContent: 'center', transform: [{ translateX: -14 }, { translateY: -14 }] },
+  hereHalo: {
+    position: 'absolute',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(56, 189, 248, 0.22)',
+  },
+  hereDot: {
+    width: 15,
+    height: 15,
+    borderRadius: 8,
+    backgroundColor: '#38bdf8',
+    borderWidth: 3,
+    borderColor: '#ffffff',
   },
   pinWrap: { position: 'absolute', alignItems: 'center', transform: [{ translateX: -2 }, { translateY: -2 }] },
   pinPulse: {
@@ -220,7 +285,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     elevation: 4,
   },
-  pinText: { color: colors.white, fontSize: 9.5, fontWeight: '900' },
+  pinText: { color: '#fff', fontSize: 9.5, fontWeight: '900' },
   pinLabel: {
     marginTop: 3,
     backgroundColor: colors.overlay,
@@ -230,21 +295,35 @@ const styles = StyleSheet.create({
     maxWidth: 110,
   },
   pinLabelText: { color: colors.text, fontSize: 8.5, fontWeight: '700' },
-  zoomBadge: {
-    position: 'absolute',
-    right: spacing(2.5),
-    top: spacing(2.5),
-    backgroundColor: 'rgba(5, 18, 13, 0.7)',
-    borderRadius: radius.xs,
-    paddingHorizontal: spacing(1.5),
-    paddingVertical: 2,
+  zoomStack: { position: 'absolute', right: spacing(2.5), top: spacing(2.5), gap: spacing(1.5) },
+  zoomButton: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.sm,
+    backgroundColor: colors.overlay,
+    borderWidth: 1,
+    borderColor: colors.borderSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  zoomText: { color: colors.muted, fontSize: 9, fontWeight: '700' },
+  hintBar: {
+    position: 'absolute',
+    left: spacing(2.5),
+    right: spacing(2.5),
+    bottom: spacing(2.5),
+    backgroundColor: colors.overlay,
+    borderWidth: 1,
+    borderColor: colors.borderSoft,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing(3),
+    paddingVertical: spacing(2.2),
+  },
+  hintText: { color: colors.textSoft, fontSize: 11.5, lineHeight: 16, fontWeight: '600' },
   attribution: {
     position: 'absolute',
     right: spacing(2.5),
-    bottom: spacing(2),
-    color: 'rgba(223, 238, 231, 0.55)',
+    top: spacing(2.5) + 74,
+    color: isDark ? 'rgba(223, 238, 231, 0.55)' : 'rgba(30, 41, 59, 0.5)',
     fontSize: 8.5,
   },
 })

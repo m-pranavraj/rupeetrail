@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { Avatar, Banner, Button, Card, Divider, Label, Muted, Pill, PressableScale, Sheet } from './ui'
 import { colors, radius, spacing } from '../theme'
@@ -39,15 +39,26 @@ export function ExpenseDetail({
   onClose: () => void
   onEdit: () => void
   onDelete: () => void
-  onAck: (status: 'acknowledged' | 'questioned', reason?: string) => void
-  onResolve: (resolution: string) => void
-  onTagPlace: () => void
-  onClearPlace: () => void
+  onAck: (status: 'acknowledged' | 'questioned', reason?: string) => void | Promise<void>
+  onResolve: (resolution: string) => void | Promise<void>
+  onTagPlace: () => void | Promise<void>
+  onClearPlace: () => void | Promise<void>
 }) {
   const [questioning, setQuestioning] = useState(false)
   const [reason, setReason] = useState('')
   const [resolving, setResolving] = useState(false)
   const [resolution, setResolution] = useState('')
+  const [working, setWorking] = useState<string | null>(null)
+
+  const run = async (key: string, work: () => void | Promise<void>) => {
+    if (working) return
+    setWorking(key)
+    try {
+      await work()
+    } finally {
+      setWorking(null)
+    }
+  }
 
   const shares = useMemo(() => {
     try {
@@ -76,6 +87,9 @@ export function ExpenseDetail({
         weekday: 'short',
         day: 'numeric',
         month: 'short',
+      })} · ${new Date(expense.date).toLocaleTimeString('en-IN', {
+        hour: 'numeric',
+        minute: '2-digit',
       })} · ${expense.split.mode === 'equal' ? 'equal split' : `${expense.split.mode} split`}`}
       onClose={onClose}
       full
@@ -125,8 +139,15 @@ export function ExpenseDetail({
           <Text style={styles.placeText} numberOfLines={1}>
             {place?.label ? place.label : place ? `${place.lat.toFixed(4)}, ${place.lng.toFixed(4)}` : 'No place tagged'}
           </Text>
-          <PressableScale onPress={place ? onClearPlace : onTagPlace}>
-            <Text style={styles.placeAction}>{place ? 'Remove' : 'Tag'}</Text>
+          <PressableScale
+            onPress={() => void run('place', place ? onClearPlace : onTagPlace)}
+            disabled={working === 'place'}
+          >
+            {working === 'place' ? (
+              <ActivityIndicator size="small" color={colors.accent} />
+            ) : (
+              <Text style={styles.placeAction}>{place ? 'Remove' : 'Tag'}</Text>
+            )}
           </PressableScale>
         </View>
       </Card>
@@ -208,11 +229,14 @@ export function ExpenseDetail({
                       label="Resolve"
                       compact
                       disabled={!resolution.trim()}
-                      onPress={() => {
-                        onResolve(resolution.trim())
-                        setResolving(false)
-                        setResolution('')
-                      }}
+                      loading={working === 'resolve'}
+                      onPress={() =>
+                        void run('resolve', async () => {
+                          await onResolve(resolution.trim())
+                          setResolving(false)
+                          setResolution('')
+                        })
+                      }
                     />
                   </View>
                   <View style={{ flex: 1 }}>
@@ -243,7 +267,8 @@ export function ExpenseDetail({
           <Button
             label="This looks right"
             variant="soft"
-            onPress={() => onAck('acknowledged')}
+            loading={working === 'agree'}
+            onPress={() => void run('agree', () => onAck('acknowledged'))}
           />
           {questioning ? (
             <View>
@@ -260,11 +285,14 @@ export function ExpenseDetail({
                 label="Send question"
                 variant="danger"
                 disabled={!reason.trim()}
-                onPress={() => {
-                  onAck('questioned', reason.trim())
-                  setQuestioning(false)
-                  setReason('')
-                }}
+                loading={working === 'question'}
+                onPress={() =>
+                  void run('question', async () => {
+                    await onAck('questioned', reason.trim())
+                    setQuestioning(false)
+                    setReason('')
+                  })
+                }
               />
               <Button label="Cancel" variant="ghost" compact onPress={() => setQuestioning(false)} />
             </View>

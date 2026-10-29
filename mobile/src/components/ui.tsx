@@ -980,6 +980,59 @@ export function Stat({
   )
 }
 
+/** A slim indeterminate progress line pinned to the top of a screen. */
+export function BusyLine({ visible }: { visible: boolean }) {
+  const slide = useRef(new Animated.Value(0)).current
+  const width = Dimensions.get('window').width
+
+  useEffect(() => {
+    if (!visible) {
+      slide.stopAnimation()
+      slide.setValue(0)
+      return
+    }
+    const loop = Animated.loop(
+      Animated.timing(slide, {
+        toValue: 1,
+        duration: 900,
+        easing: Easing.inOut(Easing.quad),
+        useNativeDriver: true,
+      }),
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [slide, visible])
+
+  if (!visible) return null
+
+  return (
+    <View pointerEvents="none" style={styles.busyTrack}>
+      <Animated.View
+        style={[
+          styles.busyFill,
+          {
+            transform: [
+              {
+                translateX: slide.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [-140, width + 20],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
+        <LinearGradient
+          colors={['transparent', colors.accent, colors.lime, 'transparent']}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={StyleSheet.absoluteFill}
+        />
+      </Animated.View>
+    </View>
+  )
+}
+
 export function Toast({ message, tone }: { message: string; tone: 'ok' | 'error' }) {
   const progress = useRef(new Animated.Value(0)).current
   const insets = useSafeAreaInsets()
@@ -1211,6 +1264,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing(3),
     zIndex: 50,
   },
+  busyTrack: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2.5,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    overflow: 'hidden',
+    zIndex: 60,
+  },
+  busyFill: { width: 140, height: 2.5 },
 })
 
 export { StatusBar }
