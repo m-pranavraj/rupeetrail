@@ -19,6 +19,7 @@ const files = [
   ['src/lib/splits.ts', 'splits.ts'],
   ['src/lib/balances.ts', 'balances.ts'],
   ['src/lib/settlement.ts', 'settlement.ts'],
+  ['src/lib/payback.ts', 'payback.ts'],
   ['src/lib/receipt.ts', 'receipt.ts'],
   ['src/lib/voice.ts', 'voice.ts'],
   ['src/lib/voice-command.ts', 'voice-command.ts'],

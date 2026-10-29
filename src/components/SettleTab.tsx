@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react'
-import type { Expense, Group, MemberId, Settlement, SettlementStatus, Transfer } from '../types'
+import type { Expense, Group, MemberId, Settlement, SettlementStatus } from '../types'
 import { computeBalances } from '../lib/balances'
 import { formatPaise, parseRupees } from '../lib/money'
 import { planSettlements } from '../lib/settlement'
 import { useStore } from '../lib/store'
-import { upiPayLink } from '../lib/upi'
-import { Avatar, Sheet, StatusPill } from './ui'
-import { IconArrowRight, IconCheck, IconClock, IconSpark } from './Icons'
+import { PaybackCard } from './PaybackCard'
+import { Sheet, StatusPill } from './ui'
+import { IconArrowRight, IconCheck, IconClock } from './Icons'
 
 const STATUS_META: Record<SettlementStatus, { label: string; tone: 'ok' | 'warn' | 'bad' | 'muted' }> = {
   pending: { label: 'Awaiting confirmation', tone: 'muted' },
@@ -57,83 +57,18 @@ export function SettleTab({
 
   return (
     <div className="settle-tab">
-      <section className="plan-card">
-        <div className="plan-card__head">
-          <h3>
-            <IconSpark size={17} /> Suggested plan
-          </h3>
-          {plan.transfers.length > 0 && (
-            <StatusPill tone="ok">
-              <IconCheck size={12} /> {plan.minimal ? 'minimum transfers' : 'workable'}
-            </StatusPill>
-          )}
-        </div>
-
-        {plan.transfers.length === 0 ? (
-          <div className="plan-empty">
-            <IconCheck size={26} />
-            <p>Everyone is square. Nothing needs to move.</p>
-          </div>
-        ) : (
-          <>
-            <ul className="transfer-list">
-              {plan.transfers.map((t, i) => (
-                <li key={`${t.from}-${t.to}-${i}`}>
-                  <div className="transfer">
-                    <span className="transfer__person">
-                      <Avatar name={name(t.from)} color={member(t.from)?.color ?? 0} size={28} />
-                      <span>{name(t.from)}</span>
-                    </span>
-                    <IconArrowRight size={16} />
-                    <span className="transfer__person">
-                      <Avatar name={name(t.to)} color={member(t.to)?.color ?? 0} size={28} />
-                      <span>{name(t.to)}</span>
-                    </span>
-                    <strong className="transfer__amount">{formatPaise(t.amountPaise)}</strong>
-                  </div>
-                  <div className="transfer__actions">
-                    <button
-                      className="btn btn--tiny"
-                      disabled={closed}
-                      onClick={() => setPaying({ from: t.from, to: t.to, amount: t.amountPaise })}
-                    >
-                      Record payment
-                    </button>
-                    {member(t.to)?.upiId && (
-                      <a
-                        className="btn btn--tiny btn--soft"
-                        href={upiPayLink({
-                          upiId: member(t.to)!.upiId!,
-                          payeeName: name(t.to),
-                          amountPaise: t.amountPaise,
-                          note: `${group.name} settlement`,
-                        })}
-                      >
-                        Pay {name(t.to)} by UPI
-                      </a>
-                    )}
-                  </div>
-                  {member(t.to)?.upiId && (
-                    <p className="transfer__upi">
-                      UPI · <code>{member(t.to)!.upiId}</code>
-                    </p>
-                  )}
-                </li>
-              ))}
-            </ul>
-            <ul className="plan-notes">
-              {plan.notes.map((n, i) => (
-                <li key={i}>{n}</li>
-              ))}
-            </ul>
-          </>
-        )}
-
-        <p className="fineprint">
-          These moves are calculated from confirmed balances. RupeeSplit never touches the money — record what
-          actually moved.
-        </p>
-      </section>
+      <PaybackCard
+        transfers={plan.transfers}
+        groupName={group.name}
+        currentMemberId={currentMemberId}
+        nameOf={name}
+        colorOf={(id) => member(id)?.color ?? 0}
+        upiOf={(id) => member(id)?.upiId}
+        onRecord={(transfer) =>
+          setPaying({ from: transfer.from, to: transfer.to, amount: transfer.amountPaise })
+        }
+        closed={closed}
+      />
 
       <div className="section-head section-head--tight">
         <h2>Payment history</h2>

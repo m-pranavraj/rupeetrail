@@ -41,6 +41,7 @@ import {
   tap,
 } from '../components/ui'
 import { TripMap, type MapPoint } from '../components/TripMap'
+import { PaybackCard } from '../components/PaybackCard'
 import { ExpenseForm } from '../components/ExpenseForm'
 import { ExpenseDetail } from '../components/ExpenseDetail'
 import { GroupSettingsSheet } from '../components/GroupSettingsSheet'
@@ -783,72 +784,26 @@ export function GroupScreen() {
         {/* --------------------------------------------------- settle tab */}
         {tab === 'settle' ? (
           <FadeIn key="settle" offset={8}>
-            <Card>
-              <Label>Suggested plan</Label>
-              {plan.transfers.length === 0 ? (
-                <View style={{ alignItems: 'center', paddingVertical: spacing(4) }}>
-                  <Text style={{ fontSize: 34 }}>🤝</Text>
-                  <Text style={styles.settledTitle}>Everyone is settled</Text>
-                  <Muted small>Nothing needs to move. The ledger is clean.</Muted>
-                </View>
-              ) : (
-                plan.transfers.map((transfer, index) => {
-                  const to = activeMembers.find((member) => member.id === transfer.to)
-                  const involvesMe = transfer.from === me.id || transfer.to === me.id
-                  const canUpi =
-                    transfer.from === me.id && Boolean(to?.upiId && isValidUpi(to.upiId))
-                  return (
-                    <View
-                      key={`${transfer.from}-${transfer.to}-${index}`}
-                      style={[styles.transfer, involvesMe && styles.transferMine]}
-                    >
-                      <Avatar
-                        name={nameOf(group, transfer.from)}
-                        color={group.members.find((entry) => entry.id === transfer.from)?.color ?? 0}
-                        size={32}
-                      />
-                      <View style={{ flex: 1, marginLeft: spacing(2.5) }}>
-                        <Text style={styles.transferWho} numberOfLines={1}>
-                          {nameOf(group, transfer.from)} → {nameOf(group, transfer.to)}
-                        </Text>
-                        <Text style={styles.transferAmount}>{formatPaise(transfer.amountPaise)}</Text>
-                      </View>
-                      <View style={{ gap: spacing(1.5) }}>
-                        {canUpi ? (
-                          <PressableScale onPress={() => void payViaUpi(transfer.to, transfer.amountPaise)}>
-                            <View style={styles.upiButton}>
-                              <Text style={styles.upiText}>Pay UPI</Text>
-                            </View>
-                          </PressableScale>
-                        ) : null}
-                        {involvesMe ? (
-                          <PressableScale
-                            disabled={payingKey !== null}
-                            onPress={() =>
-                              void recordTransfer(
-                                transfer.from,
-                                transfer.to,
-                                transfer.amountPaise,
-                                `${transfer.from}-${transfer.to}-${index}`,
-                              )
-                            }
-                          >
-                            <View style={styles.recordButton}>
-                              {payingKey === `${transfer.from}-${transfer.to}-${index}` ? (
-                                <ActivityIndicator size="small" color={colors.accent} />
-                              ) : (
-                                <Text style={styles.recordText}>Record</Text>
-                              )}
-                            </View>
-                          </PressableScale>
-                        ) : null}
-                      </View>
-                    </View>
-                  )
-                })
-              )}
-              {plan.notes[0] ? <Muted small>{plan.notes[0]}</Muted> : null}
-            </Card>
+            <PaybackCard
+              transfers={plan.transfers}
+              groupName={group.name}
+              meId={me.id}
+              nameOf={(id) => nameOf(group, id)}
+              colorOf={(id) => group.members.find((entry) => entry.id === id)?.color ?? 0}
+              upiOf={(id) => activeMembers.find((entry) => entry.id === id)?.upiId}
+              onRecord={(transfer) =>
+                void recordTransfer(
+                  transfer.from,
+                  transfer.to,
+                  transfer.amountPaise,
+                  `${transfer.from}-${transfer.to}-${transfer.amountPaise}`,
+                )
+              }
+              onPayUpi={(toId, amountPaise) => void payViaUpi(toId, amountPaise)}
+              payingKey={payingKey}
+              closed={group.status === 'closed'}
+              onNotify={notify}
+            />
 
             <Button
               label="Record a payment"
@@ -1478,38 +1433,7 @@ const styles = StyleSheet.create({
   entryLabel: { color: colors.textSoft, fontSize: 12, flex: 1 },
   entryAmount: { fontSize: 12, fontWeight: '700' },
 
-  transfer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: spacing(2.5),
-    paddingHorizontal: spacing(2.5),
-    borderRadius: radius.md,
-    marginTop: spacing(2),
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.borderSoft,
-  },
-  transferMine: { borderColor: tints.mint.border, backgroundColor: tints.mint.fill },
   transferWho: { color: colors.textSoft, fontSize: 12.5, fontWeight: '600' },
-  transferAmount: { color: colors.text, fontSize: 15, fontWeight: '800', marginTop: 2 },
-  upiButton: {
-    backgroundColor: tints.accent.fill,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing(2.5),
-    paddingVertical: spacing(1.5),
-    borderWidth: 1,
-    borderColor: tints.accent.border,
-  },
-  upiText: { color: colors.accent, fontSize: 10.5, fontWeight: '800' },
-  recordButton: {
-    backgroundColor: colors.surfaceHigh,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing(2.5),
-    paddingVertical: spacing(1.5),
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  recordText: { color: colors.textSoft, fontSize: 10.5, fontWeight: '800' },
   paymentRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing(2.2), gap: spacing(2) },
   paymentHero: { alignItems: 'center', paddingVertical: spacing(3) },
   paymentAmount: { color: colors.text, fontSize: 34, fontWeight: '900', letterSpacing: -1.2 },
@@ -1537,7 +1461,6 @@ const styles = StyleSheet.create({
   payChipText: { color: colors.muted, fontSize: 12.5, fontWeight: '700' },
   payChipTextActive: { color: colors.accent },
   link: { color: colors.accent, fontSize: 11.5, fontWeight: '800' },
-  settledTitle: { color: colors.text, fontSize: 15, fontWeight: '800', marginTop: spacing(2) },
 
   mapHead: { flexDirection: 'row', alignItems: 'center', gap: spacing(3) },
   mapTitle: { color: colors.text, fontSize: 16, fontWeight: '800' },

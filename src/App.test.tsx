@@ -53,7 +53,7 @@ function baseSnapshot(): GroupSnapshot {
   }
 }
 
-function seedDevice() {
+function seedDevice(snapshot: GroupSnapshot = baseSnapshot()) {
   localStorage.setItem(
     'rupeetrail.identity.v3',
     JSON.stringify({ name: 'Arjun', upiId: 'arjun@okaxis' }),
@@ -73,7 +73,7 @@ function seedDevice() {
       },
     ]),
   )
-  localStorage.setItem(`rupeetrail.cache.v3.${GROUP_ID}`, JSON.stringify(baseSnapshot()))
+  localStorage.setItem(`rupeetrail.cache.v3.${GROUP_ID}`, JSON.stringify(snapshot))
 }
 
 let server = baseSnapshot()
@@ -354,7 +354,7 @@ describe('shared groups', () => {
     expect(screen.getByRole('dialog')).toBeTruthy()
   })
 
-  it('offers a UPI payment link for the suggested transfer', async () => {
+  it('shows who pays whom, person by person, with a working amount filter', async () => {
     seedDevice()
     const user = userEvent.setup()
     renderApp()
@@ -362,10 +362,42 @@ describe('shared groups', () => {
     await user.click(await screen.findByText('Goa plan'))
     await user.click(await screen.findByRole('tab', { name: 'Settle' }))
 
-    const payLink = await screen.findByRole('link', { name: /Pay Arjun by UPI/i })
+    expect(await screen.findByText('Who pays whom')).toBeTruthy()
+    expect(await screen.findByText('Priya should pay you')).toBeTruthy()
+    expect(screen.getByText('Coming to you')).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: /Priya/ }))
+    expect(await screen.findByText('Priya pays out')).toBeTruthy()
+    expect(await screen.findByText('Priya should pay Arjun')).toBeTruthy()
+
+    await user.selectOptions(screen.getByLabelText('Filter transfers by amount'), 'over5000')
+    expect(await screen.findByText('No transfers match this filter.')).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: 'Show all amounts' }))
+    expect(await screen.findByText('Who pays whom')).toBeTruthy()
+    expect(await screen.findByText('Priya should pay you')).toBeTruthy()
+  })
+
+  it('offers UPI to the person who actually owes the money', async () => {
+    const snapshot = baseSnapshot()
+    snapshot.expenses = [
+      {
+        ...snapshot.expenses[0],
+        payers: [{ memberId: PRIYA, amountPaise: 100000 }],
+      },
+    ]
+    server = snapshot
+    seedDevice(snapshot)
+    const user = userEvent.setup()
+    renderApp()
+
+    await user.click(await screen.findByText('Goa plan'))
+    await user.click(await screen.findByRole('tab', { name: 'Settle' }))
+
+    expect(await screen.findByText('You should pay Priya')).toBeTruthy()
+    const payLink = await screen.findByRole('link', { name: /Pay Priya by UPI/i })
     expect(payLink.getAttribute('href')).toContain('upi://pay?')
-    expect(payLink.getAttribute('href')).toContain('pa=arjun%40okaxis')
-    expect(await screen.findByText('Suggested plan')).toBeTruthy()
+    expect(payLink.getAttribute('href')).toContain('pa=priya%40ybl')
   })
 })
 

@@ -1,0 +1,111 @@
+import type { MemberId, Transfer } from '../types'
+
+export type PaybackFilter =
+  | 'all'
+  | 'under300'
+  | 'between300and1000'
+  | 'between1000and5000'
+  | 'over5000'
+
+export interface PaybackFilterOption {
+  id: PaybackFilter
+  label: string
+  minPaise: number
+  maxPaise: number | null
+}
+
+export const PAYBACK_FILTERS: readonly PaybackFilterOption[] = [
+  { id: 'all', label: 'All amounts', minPaise: 0, maxPaise: null },
+  { id: 'under300', label: 'Under ₹300', minPaise: 0, maxPaise: 30_000 },
+  { id: 'between300and1000', label: '₹300 – ₹1,000', minPaise: 30_000, maxPaise: 1_00_000 },
+  { id: 'between1000and5000', label: '₹1,000 – ₹5,000', minPaise: 1_00_000, maxPaise: 5_00_000 },
+  { id: 'over5000', label: 'Over ₹5,000', minPaise: 5_00_000, maxPaise: null },
+]
+
+export function amountInFilter(amountPaise: number, filter: PaybackFilter): boolean {
+  const option = PAYBACK_FILTERS.find((entry) => entry.id === filter) ?? PAYBACK_FILTERS[0]
+  if (amountPaise < option.minPaise) return false
+  return option.maxPaise === null || amountPaise < option.maxPaise
+}
+
+export interface PaybackPerson {
+  memberId: MemberId
+  incoming: Transfer[]
+  outgoing: Transfer[]
+  incomingPaise: number
+  outgoingPaise: number
+}
+
+export interface PaybackView {
+  transfers: Transfer[]
+  people: PaybackPerson[]
+  totalPaise: number
+}
+
+/**
+ * Turn a settlement plan into a person-by-person view: for every member with a
+ * transfer, exactly who pays them and whom they pay. An amount band and a
+ * one-person scope narrow the same view without changing the underlying plan.
+ */
+export function buildPayback(
+  transfers: Transfer[],
+  options: {
+    filter?: PaybackFilter
+    onlyMember?: MemberId | null
+    priorityMember?: MemberId | null
+  } = {},
+): PaybackView {
+  const { filter = 'all', onlyMember = null, priorityMember = null } = options
+  const kept = transfers
+    .filter(
+      (transfer) =>
+        amountInFilter(transfer.amountPaise, filter) &&
+        (!onlyMember || transfer.from === onlyMember || transfer.to === onlyMember),
+    )
+    .map((transfer) => ({ ...transfer }))
+
+  const byMember = new Map<MemberId, PaybackPerson>()
+  const personFor = (memberId: MemberId): PaybackPerson => {
+    const existing = byMember.get(memberId)
+    if (existing) return existing
+    const created: PaybackPerson = {
+      memberId,
+      incoming: [],
+      outgoing: [],
+      incomingPaise: 0,
+      outgoingPaise: 0,
+    }
+    byMember.set(memberId, created)
+    return created
+  }
+
+  for (const transfer of kept) {
+    const receiver = personFor(transfer.to)
+    receiver.incoming.push(transfer)
+    receiver.incomingPaise += transfer.amountPaise
+
+    const payer = personFor(transfer.from)
+    payer.outgoing.push(transfer)
+    payer.outgoingPaise += transfer.amountPaise
+  }
+
+  for (const person of byMember.values()) {
+    person.incoming.sort((a, b) => b.amountPaise - a.amountPaise)
+    person.outgoing.sort((a, b) => b.amountPaise - a.amountPaise)
+  }
+
+  const activity = (person: PaybackPerson) => person.incomingPaise + person.outgoingPaise
+  const people = [...byMember.values()].sort((a, b) => {
+    if (priorityMember) {
+      if (a.memberId === priorityMember && b.memberId !== priorityMember) return -1
+      if (b.memberId === priorityMember && a.memberId !== priorityMember) return 1
+    }
+    return activity(b) - activity(a) || a.memberId.localeCompare(b.memberId)
+  })
+
+  return {
+    transfers: kept,
+    people,
+    totalPaise: kept.reduce((sum, transfer) => sum + transfer.amountPaise, 0),
+  }
+}
