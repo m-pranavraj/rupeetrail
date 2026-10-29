@@ -12,7 +12,8 @@ import { colors, radius, spacing } from './theme'
  */
 export function UpdateGate() {
   const [release, setRelease] = useState<ReleaseInfo | null>(null)
-  const [dismissed, setDismissed] = useState(false)
+  // Remember which build was dismissed, so "Later" does not hide the next one.
+  const [dismissedCode, setDismissedCode] = useState<number | null>(null)
 
   const check = useCallback(async () => {
     try {
@@ -34,9 +35,17 @@ export function UpdateGate() {
   if (!release) return null
 
   const mandatory = release.mandatory || APP_VERSION_CODE < release.minSupportedCode
+  const dismissed = dismissedCode === release.versionCode
 
   return (
-    <Modal visible={!dismissed || mandatory} transparent animationType="fade" onRequestClose={() => {}}>
+    <Modal
+      visible={!dismissed || mandatory}
+      transparent
+      animationType="fade"
+      onRequestClose={() => {
+        if (!mandatory) setDismissedCode(release.versionCode)
+      }}
+    >
       <View style={styles.backdrop}>
         <View style={styles.card}>
           <Text style={styles.badge}>Update available</Text>
@@ -57,7 +66,7 @@ export function UpdateGate() {
             }}
           />
           {!mandatory && (
-            <Button label="Later" variant="ghost" onPress={() => setDismissed(true)} />
+            <Button label="Later" variant="ghost" onPress={() => setDismissedCode(release.versionCode)} />
           )}
           <Text style={styles.hint}>
             Android will ask you to allow installs from this app the first time. Your data stays on the
