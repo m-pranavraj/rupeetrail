@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import type { Group } from '../types'
 import { useStore } from '../lib/store'
 import { computeBalances } from '../lib/balances'
@@ -12,6 +12,8 @@ import { SettleTab } from './SettleTab'
 import { ExpenseForm } from './ExpenseForm'
 import { ExpenseDetail } from './ExpenseDetail'
 import { InviteSheet } from './InviteSheet'
+import { VoiceCommandBar } from './VoiceCommandBar'
+import { parseVoiceCommand, type AiCommand } from '../lib/ondevice-ai'
 
 type Tab = 'expenses' | 'balances' | 'settle'
 
@@ -24,6 +26,7 @@ export function GroupScreen({ groupId, onBack }: { groupId: string; onBack: () =
     loading,
     live,
     presence,
+    summaries,
     addExpense,
     addMember,
     removeMember,
@@ -32,6 +35,7 @@ export function GroupScreen({ groupId, onBack }: { groupId: string; onBack: () =
     setGroupStatus,
     leaveGroup,
     refresh,
+    recordSettlement,
   } = useStore()
   const [tab, setTab] = useState<Tab>('expenses')
   const [addOpen, setAddOpen] = useState(false)
@@ -39,6 +43,7 @@ export function GroupScreen({ groupId, onBack }: { groupId: string; onBack: () =
   const [detailId, setDetailId] = useState<string | null>(null)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [voiceReply, setVoiceReply] = useState('')
 
   const snapshot = active && active.group.id === groupId ? active : null
   const group = snapshot?.group ?? null
@@ -207,10 +212,18 @@ export function GroupScreen({ groupId, onBack }: { groupId: string; onBack: () =
         )}
       </main>
 
-      {tab === 'expenses' && !closed && (
-        <button className="fab" onClick={() => setAddOpen(true)} aria-label="Add expense">
-          <IconPlus size={24} />
-        </button>
+      {!closed && (
+        <>
+          <VoiceCommandBar
+            onTabChange={setTab}
+            onOpenGroup={onBack}
+          />
+          {tab === 'expenses' && (
+            <button className="fab" onClick={() => setAddOpen(true)} aria-label="Add expense">
+              <IconPlus size={24} />
+            </button>
+          )}
+        </>
       )}
 
       <Sheet

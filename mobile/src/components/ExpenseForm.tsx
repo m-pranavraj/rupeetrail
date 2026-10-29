@@ -17,7 +17,7 @@ import {
   tap,
 } from './ui'
 import { BillScanner } from './BillScanner'
-import { colors, radius, spacing } from '../theme'
+import { colors, radius, spacing, tints } from '../theme'
 import { formatPaise, paiseToInput, parseRupees } from '../lib/money'
 import { allocateSplit, SplitError } from '../lib/splits'
 import type { Expense, ExpenseCategory, Group, Member, Split, SplitMode } from '../lib/types'
@@ -614,7 +614,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  chipMint: { backgroundColor: '#123f30', borderColor: '#2b6b52' },
+  chipMint: { backgroundColor: tints.accent.fill, borderColor: tints.accent.border },
   chipText: { color: colors.muted, fontSize: 12.5, fontWeight: '700' },
 
   payerBox: {
@@ -680,12 +680,12 @@ const styles = StyleSheet.create({
     borderColor: colors.borderSoft,
     backgroundColor: colors.surface,
   },
-  placeRowOn: { borderColor: '#2b6b52', backgroundColor: '#0f2e24' },
+  placeRowOn: { borderColor: tints.mint.border, backgroundColor: tints.mint.fill },
   placeIcon: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: 'rgba(79,227,172,0.12)',
+    backgroundColor: colors.mintWash,
     alignItems: 'center',
     justifyContent: 'center',
   },

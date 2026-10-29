@@ -3,7 +3,7 @@ import { Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-nativ
 import * as ImagePicker from 'expo-image-picker'
 import { Ionicons } from '@expo/vector-icons'
 import { Banner, Button, Card, Label, Muted, Pill, PressableScale, tap } from './ui'
-import { colors, radius, spacing } from '../theme'
+import { colors, radius, spacing, tints } from '../theme'
 import { formatPaise } from '../lib/money'
 import { parseReceipt, type ParsedReceipt } from '../lib/receipt'
 import { buildExpenseFromReceipt, buildExpenseFromVoice } from '../lib/billParser'
@@ -356,7 +356,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 14,
-    backgroundColor: '#123f30',
+    backgroundColor: tints.accent.fill,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: spacing(2),

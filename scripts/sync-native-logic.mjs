@@ -21,6 +21,7 @@ const files = [
   ['src/lib/settlement.ts', 'settlement.ts'],
   ['src/lib/receipt.ts', 'receipt.ts'],
   ['src/lib/voice.ts', 'voice.ts'],
+  ['src/lib/voice-command.ts', 'voice-command.ts'],
   ['src/lib/billParser.ts', 'billParser.ts'],
 ]
 

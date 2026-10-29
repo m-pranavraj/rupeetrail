@@ -22,6 +22,7 @@ import {
   Divider,
   EmptyState,
   FadeIn,
+  Field,
   IconButton,
   KeyboardAware,
   Label,
@@ -29,6 +30,7 @@ import {
   Pill,
   PressableScale,
   Screen,
+  Segmented,
   Sheet,
   Toast,
   buzz,
@@ -38,14 +40,15 @@ import { TripMap, type MapPoint } from '../components/TripMap'
 import { ExpenseForm } from '../components/ExpenseForm'
 import { ExpenseDetail } from '../components/ExpenseDetail'
 import { GroupSettingsSheet } from '../components/GroupSettingsSheet'
+import { VoiceAssistant } from '../components/VoiceAssistant'
 import { useStore } from '../state'
 import { API_BASE, APP_LABEL } from '../config'
 import { computeBalances, isReconciled, nameOf } from '../lib/balances'
-import { formatPaise } from '../lib/money'
+import { formatPaise, parseRupees } from '../lib/money'
 import { planSettlements } from '../lib/settlement'
 import { shareTripCsv } from '../lib/csv'
 import { isValidUpi, upiPayLink } from '../lib/upi'
-import { categoryColors, categoryEmoji, colors, gradients, radius, spacing } from '../theme'
+import { categoryColors, categoryEmoji, colors, gradients, radius, spacing, tints } from '../theme'
 import type { SplitMode } from '../lib/types'
 
 type Tab = 'expenses' | 'balances' | 'settle' | 'map'
@@ -101,6 +104,7 @@ export function GroupScreen() {
     confirmSettlement,
     tagPlace,
     clearPlace,
+    openGroup,
   } = useStore()
 
   const insets = useSafeAreaInsets()
@@ -110,6 +114,13 @@ export function GroupScreen() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [manualPay, setManualPay] = useState(false)
+  const [payFrom, setPayFrom] = useState('')
+  const [payTo, setPayTo] = useState('')
+  const [payFromName, setPayFromName] = useState('')
+  const [payToName, setPayToName] = useState('')
+  const [payAmount, setPayAmount] = useState('')
+  const [payMethod, setPayMethod] = useState<'upi' | 'cash' | 'bank'>('upi')
   const [expandedMember, setExpandedMember] = useState<string | null>(null)
   const [toast, setToast] = useState<{ message: string; tone: 'ok' | 'error' } | null>(null)
 
@@ -240,6 +251,52 @@ export function GroupScreen() {
       await Linking.openURL(link)
     } catch {
       notify('No UPI app answered on this phone.', 'error')
+    }
+  }
+
+  const openManualPay = () => {
+    setPayFrom(me.id)
+    setPayTo('')
+    setPayFromName('')
+    setPayToName('')
+    setPayAmount('')
+    setPayMethod('upi')
+    setManualPay(true)
+  }
+
+  const submitManualPay = async () => {
+    const slugify = (value: string) =>
+      value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    if (payFrom === 'manual' && !payFromName.trim()) {
+      notify('Enter the name of the person who paid.', 'error')
+      return
+    }
+    if (payTo === 'manual' && !payToName.trim()) {
+      notify('Enter the name of the person who received.', 'error')
+      return
+    }
+    const from = payFrom === 'manual' ? `manual:from:${slugify(payFromName) || 'someone'}` : payFrom
+    const to = payTo === 'manual' ? `manual:to:${slugify(payToName) || 'someone'}` : payTo
+    if (!from || !to) {
+      notify('Pick who paid and who received.', 'error')
+      return
+    }
+    if (from === to) {
+      notify('Payer and receiver must be different people.', 'error')
+      return
+    }
+    const paise = parseRupees(payAmount)
+    if (!paise || paise <= 0) {
+      notify('Enter an amount greater than zero.', 'error')
+      return
+    }
+    const ok = await settle({ from, to, amountPaise: paise, method: payMethod })
+    if (ok) {
+      buzz()
+      setManualPay(false)
+      notify('Payment recorded — the balance is updated.')
+    } else {
+      notify('Could not record that payment.', 'error')
     }
   }
 
@@ -667,6 +724,13 @@ export function GroupScreen() {
               <Muted small>{plan.notes[0] ?? ''}</Muted>
             </Card>
 
+            <Button
+              label="Record a payment"
+              variant="soft"
+              onPress={openManualPay}
+              icon={<Ionicons name="cash-outline" size={18} color={colors.text} />}
+            />
+
             {settlements.length > 0 ? (
               <Card>
                 <Label>Payments</Label>
@@ -680,7 +744,7 @@ export function GroupScreen() {
                         </Text>
                         <Text style={styles.personMeta}>
                           {formatPaise(payment.amountPaise)} · {payment.method} ·{' '}
-                          {payment.status.replace('_', ' ')}
+                          {payment.status.replace(/_/g, ' ')}
                         </Text>
                       </View>
                       {payment.status !== 'confirmed' && payment.status !== 'disputed' ? (
@@ -697,11 +761,14 @@ export function GroupScreen() {
                           ) : null}
                         </View>
                       ) : (
-                        <Pill tone={payment.status === 'confirmed' ? 'ok' : 'bad'}>{payment.status.replace('_', ' ')}</Pill>
+                        <Pill tone={payment.status === 'confirmed' ? 'ok' : 'bad'}>{payment.status.replace(/_/g, ' ')}</Pill>
                       )}
                     </View>
                   ))}
-                <Muted small>Balances move only after both sides (or a provider) confirm a payment.</Muted>
+                <Muted small>
+                  In-group payments confirm on both phones. A payment with someone outside the group moves the
+                  balance immediately.
+                </Muted>
               </Card>
             ) : null}
           </FadeIn>
@@ -789,14 +856,17 @@ export function GroupScreen() {
 
       {/* ------------------------------------------------------------- FAB */}
       {group.status !== 'closed' ? (
-        <PressableScale
-          onPress={() => setAdding(true)}
-          style={[styles.fab, { bottom: insets.bottom + spacing(4) }]}
-        >
-          <LinearGradient colors={gradients.primary} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.fabFill}>
-            <Ionicons name="add" size={26} color={colors.accentInk} />
-          </LinearGradient>
-        </PressableScale>
+        <>
+          <VoiceAssistant onTabChange={setTab} onOpenGroup={(groupId) => void openGroup(groupId)} />
+          <PressableScale
+            onPress={() => setAdding(true)}
+            style={[styles.fab, { bottom: insets.bottom + spacing(4) }]}
+          >
+            <LinearGradient colors={gradients.primary} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.fabFill}>
+              <Ionicons name="add" size={26} color={colors.accentInk} />
+            </LinearGradient>
+          </PressableScale>
+        </>
       ) : (
         <View style={[styles.closedBar, { bottom: insets.bottom + spacing(3) }]}>
           <Ionicons name="lock-closed-outline" size={14} color={colors.warn} />
@@ -915,6 +985,119 @@ export function GroupScreen() {
         />
       ) : null}
 
+      {manualPay ? (
+        <Sheet
+          visible={manualPay}
+          title="Record a payment"
+          subtitle="Cash, UPI or a person who is not in the group yet. The balance moves as soon as you record it."
+          onClose={() => setManualPay(false)}
+          footer={
+            <Button
+              label="Record payment"
+              loading={busy}
+              disabled={!payAmount.trim()}
+              onPress={() => void submitManualPay()}
+            />
+          }
+        >
+          <View style={{ marginTop: spacing(2) }}>
+            <Label>Who paid</Label>
+            <View style={styles.payChips}>
+              {activeMembers.map((member) => {
+                const selected = payFrom === member.id
+                return (
+                  <PressableScale key={member.id} onPress={() => setPayFrom(member.id)} scaleTo={0.94}>
+                    <View style={[styles.payChip, selected && styles.payChipActive]}>
+                      <Text style={[styles.payChipText, selected && styles.payChipTextActive]} numberOfLines={1}>
+                        {member.name}
+                      </Text>
+                    </View>
+                  </PressableScale>
+                )
+              })}
+              <PressableScale onPress={() => setPayFrom('manual')} scaleTo={0.94}>
+                <View style={[styles.payChip, payFrom === 'manual' && styles.payChipActive]}>
+                  <Text
+                    style={[styles.payChipText, payFrom === 'manual' && styles.payChipTextActive]}
+                    numberOfLines={1}
+                  >
+                    Someone else
+                  </Text>
+                </View>
+              </PressableScale>
+            </View>
+            {payFrom === 'manual' ? (
+              <Field
+                label="Name of person who paid"
+                value={payFromName}
+                onChangeText={setPayFromName}
+                placeholder="e.g. Priya Sharma"
+              />
+            ) : null}
+          </View>
+
+          <View style={{ marginTop: spacing(4) }}>
+            <Label>Who received</Label>
+            <View style={styles.payChips}>
+              {activeMembers.map((member) => {
+                const selected = payTo === member.id
+                return (
+                  <PressableScale key={member.id} onPress={() => setPayTo(member.id)} scaleTo={0.94}>
+                    <View style={[styles.payChip, selected && styles.payChipActive]}>
+                      <Text style={[styles.payChipText, selected && styles.payChipTextActive]} numberOfLines={1}>
+                        {member.name}
+                      </Text>
+                    </View>
+                  </PressableScale>
+                )
+              })}
+              <PressableScale onPress={() => setPayTo('manual')} scaleTo={0.94}>
+                <View style={[styles.payChip, payTo === 'manual' && styles.payChipActive]}>
+                  <Text
+                    style={[styles.payChipText, payTo === 'manual' && styles.payChipTextActive]}
+                    numberOfLines={1}
+                  >
+                    Someone else
+                  </Text>
+                </View>
+              </PressableScale>
+            </View>
+            {payTo === 'manual' ? (
+              <Field
+                label="Name of person who received"
+                value={payToName}
+                onChangeText={setPayToName}
+                placeholder="e.g. Rahul"
+              />
+            ) : null}
+          </View>
+
+          <Field
+            label="Amount"
+            value={payAmount}
+            onChangeText={setPayAmount}
+            placeholder="500"
+            keyboardType="decimal-pad"
+            hint="₹ amount that actually moved."
+          />
+
+          <View style={{ marginTop: spacing(4) }}>
+            <Label>How did it move?</Label>
+            <View style={{ marginTop: spacing(2) }}>
+              <Segmented
+                value={payMethod}
+                onChange={setPayMethod}
+                options={[
+                  { value: 'upi', label: 'UPI' },
+                  { value: 'cash', label: 'Cash' },
+                  { value: 'bank', label: 'Bank' },
+                ]}
+              />
+            </View>
+          </View>
+        </Sheet>
+      ) : null}
+
       {toast ? <Toast message={toast.message} tone={toast.tone} /> : null}
       {busy ? <View pointerEvents="none" style={styles.busyBar} /> : null}
     </View>
@@ -934,7 +1117,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    backgroundColor: colors.glass,
     borderWidth: 1,
     borderColor: colors.borderSoft,
     alignItems: 'center',
@@ -984,7 +1167,7 @@ const styles = StyleSheet.create({
     marginTop: spacing(3.5),
     paddingTop: spacing(3),
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.06)',
+    borderTopColor: colors.borderSoft,
   },
   heroStatLabel: { color: colors.mutedDim, fontSize: 9.5, fontWeight: '700', letterSpacing: 0.7, textTransform: 'uppercase' },
   heroStatValue: { color: colors.textSoft, fontSize: 13.5, fontWeight: '800', marginTop: 3 },
@@ -1049,16 +1232,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.borderSoft,
   },
-  transferMine: { borderColor: '#2b6b52', backgroundColor: '#0f2e24' },
+  transferMine: { borderColor: tints.mint.border, backgroundColor: tints.mint.fill },
   transferWho: { color: colors.textSoft, fontSize: 12.5, fontWeight: '600' },
   transferAmount: { color: colors.text, fontSize: 15, fontWeight: '800', marginTop: 2 },
   upiButton: {
-    backgroundColor: '#123f30',
+    backgroundColor: tints.accent.fill,
     borderRadius: radius.sm,
     paddingHorizontal: spacing(2.5),
     paddingVertical: spacing(1.5),
     borderWidth: 1,
-    borderColor: '#2b6b52',
+    borderColor: tints.accent.border,
   },
   upiText: { color: colors.accent, fontSize: 10.5, fontWeight: '800' },
   recordButton: {
@@ -1071,6 +1254,18 @@ const styles = StyleSheet.create({
   },
   recordText: { color: colors.textSoft, fontSize: 10.5, fontWeight: '800' },
   paymentRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing(2.2), gap: spacing(2) },
+  payChips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(2), marginTop: spacing(2) },
+  payChip: {
+    paddingHorizontal: spacing(3),
+    paddingVertical: spacing(2),
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  payChipActive: { borderColor: colors.accent, backgroundColor: tints.mint.fill },
+  payChipText: { color: colors.muted, fontSize: 12.5, fontWeight: '700' },
+  payChipTextActive: { color: colors.accent },
   link: { color: colors.accent, fontSize: 11.5, fontWeight: '800' },
   settledTitle: { color: colors.text, fontSize: 15, fontWeight: '800', marginTop: spacing(2) },
 
@@ -1080,7 +1275,7 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: '#123f30',
+    backgroundColor: tints.accent.fill,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1101,7 +1296,7 @@ const styles = StyleSheet.create({
     borderRadius: 29,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#2fe0a4',
+    shadowColor: colors.accent,
     shadowOpacity: 0.4,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
@@ -1115,11 +1310,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing(2),
-    backgroundColor: '#3c2f12',
+    backgroundColor: tints.warn.fill,
     borderRadius: radius.pill,
     paddingVertical: spacing(2.6),
     borderWidth: 1,
-    borderColor: '#5a4718',
+    borderColor: tints.warn.border,
   },
   closedText: { color: colors.warn, fontSize: 11, fontWeight: '700' },
   busyBar: {

@@ -16,7 +16,7 @@ import {
   Sheet,
   tap,
 } from './ui'
-import { colors, radius, spacing } from '../theme'
+import { colors, radius, spacing, tints } from '../theme'
 import { formatPaise } from '../lib/money'
 import type { Group } from '../lib/types'
 
@@ -297,7 +297,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing(1.5),
-    backgroundColor: '#123f30',
+    backgroundColor: tints.accent.fill,
     borderRadius: radius.pill,
     paddingHorizontal: spacing(2.5),
     paddingVertical: spacing(1.5),
@@ -327,7 +327,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  emojiActive: { borderColor: colors.accent, backgroundColor: '#14342a' },
+  emojiActive: { borderColor: colors.accent, backgroundColor: tints.mint.fill },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing(3) },
   statusTitle: { color: colors.text, fontSize: 15, fontWeight: '800', marginBottom: 2 },
   memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing(2) },

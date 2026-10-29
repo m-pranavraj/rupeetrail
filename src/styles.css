@@ -849,6 +849,214 @@ h3 {
   }
 }
 
+/* ---------- voice command bar ---------- */
+
+.voice-bar {
+  position: fixed;
+  left: 50%;
+  bottom: calc(22px + env(safe-area-inset-bottom));
+  transform: translateX(calc(-50% - 232px));
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  pointer-events: none;
+}
+.voice-bar > * {
+  pointer-events: auto;
+}
+
+.voice-fab {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: linear-gradient(150deg, #7b61ff, #3ac69a);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 12px 30px -8px rgba(80, 60, 180, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+.voice-fab:hover {
+  transform: scale(1.05);
+}
+.voice-fab:active {
+  transform: scale(0.97);
+}
+.voice-fab--active {
+  background: linear-gradient(150deg, #ff806b, #e3a33b);
+  animation: voiceGlow 1.6s ease-in-out infinite;
+}
+
+@keyframes voiceGlow {
+  0%, 100% {
+    box-shadow: 0 12px 30px -8px rgba(228, 100, 60, 0.6), 0 0 0 0 rgba(255, 128, 107, 0.4);
+  }
+  50% {
+    box-shadow: 0 12px 34px -6px rgba(228, 100, 60, 0.75), 0 0 0 10px rgba(255, 128, 107, 0);
+  }
+}
+
+.voice-bar__pulse {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: rgba(255, 128, 107, 0.35);
+  animation: voicePulse 1.6s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes voicePulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+.voice-bar__panel {
+  width: min(340px, calc(100vw - 36px));
+  padding: 14px 16px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  animation: voicePanelIn 0.22s cubic-bezier(0.2, 0.9, 0.25, 1);
+  transform-origin: bottom left;
+}
+
+@keyframes voicePanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.voice-bar__panel--error {
+  border-color: rgba(196, 84, 59, 0.4);
+}
+.voice-bar__panel--confirm {
+  border-color: rgba(227, 163, 59, 0.5);
+}
+
+.voice-bar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.voice-bar__status {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.voice-bar__close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--ink-faint);
+  background: var(--cream);
+}
+
+.voice-bar__close:hover {
+  color: var(--ink);
+}
+
+.voice-bar__transcript {
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.voice-bar__transcript span {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 2px;
+}
+
+.voice-bar__reply {
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.voice-bar__reply.is-error {
+  color: var(--neg);
+}
+
+.voice-bar__error {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--neg);
+}
+
+.voice-bar__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.voice-bar__btn {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  transition: transform 0.12s ease, background 0.15s ease;
+}
+.voice-bar__btn:active {
+  transform: scale(0.97);
+}
+.voice-bar__btn--confirm {
+  background: linear-gradient(150deg, var(--forest-2), var(--forest));
+  color: var(--amber-soft);
+}
+.voice-bar__btn--cancel {
+  background: var(--cream);
+  color: var(--ink-soft);
+}
+
+.voice-bar__hint {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+@media (max-width: 599px) {
+  .voice-bar {
+    left: 18px;
+    bottom: calc(18px + env(safe-area-inset-bottom));
+    transform: none;
+  }
+  .voice-bar__panel {
+    width: calc(100vw - 36px);
+  }
+}
+
 /* ---------- segmented tabs ---------- */
 
 .segmented {

@@ -18,7 +18,7 @@ import {
 } from '../components/ui'
 import { useStore } from '../state'
 import { APP_LABEL } from '../config'
-import { colors, gradients, radius, spacing } from '../theme'
+import { colors, gradients, radius, spacing, tints } from '../theme'
 
 const EMOJI = ['🏖️', '🏠', '🍜', '🚗', '🎉', '🏔️', '✈️', '🍻', '🎓', '🧾']
 
@@ -262,7 +262,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    backgroundColor: colors.glass,
     borderWidth: 1,
     borderColor: colors.borderSoft,
     alignItems: 'center',
@@ -291,9 +291,9 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 18,
-    backgroundColor: 'rgba(79,227,172,0.12)',
+    backgroundColor: colors.mintWash,
     borderWidth: 1,
-    borderColor: '#2b6b52',
+    borderColor: tints.accent.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -353,5 +353,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  emojiActive: { borderColor: colors.accent, backgroundColor: '#14342a' },
+  emojiActive: { borderColor: colors.accent, backgroundColor: tints.mint.fill },
 })

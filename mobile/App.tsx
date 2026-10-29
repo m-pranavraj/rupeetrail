@@ -10,7 +10,7 @@ import { GroupScreen } from './src/screens/GroupScreen'
 import { OfflineGate } from './src/OfflineGate'
 import { UpdateGate } from './src/UpdateGate'
 import { Toast } from './src/components/ui'
-import { colors } from './src/theme'
+import { colors, isDark } from './src/theme'
 
 function Scene({ children }: { children: React.ReactNode }) {
   const progress = useRef(new Animated.Value(0)).current
@@ -85,7 +85,7 @@ function Shell() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
       <LedgerProvider>
         <Shell />
         <UpdateGate />

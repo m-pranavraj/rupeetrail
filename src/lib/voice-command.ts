@@ -1,0 +1,800 @@
+/**
+ * Voice command understanding — pure, DOM-free and shared by the web app and
+ * the React Native client.
+ *
+ * The parser is deliberately deterministic: it maps spoken English (and the
+ * Hinglish-flavoured shorthand people actually use) onto a small command union.
+ * The caller is always responsible for confirming destructive or money-moving
+ * actions before they run.
+ */
+
+export type AiCommand =
+  | { type: 'create_group'; name: string; emoji: string }
+  | { type: 'join_group'; code: string }
+  | {
+      type: 'add_expense'
+      description: string
+      amountPaise: number
+      splitMode: 'equal' | 'exact' | 'percent'
+      participantIds: string[]
+      payerId: string
+      notes: string
+      splitValues?: Record<string, number>
+    }
+  | { type: 'delete_expense'; expenseId: string; groupId: string }
+  | {
+      type: 'edit_expense'
+      expenseId: string
+      groupId: string
+      description?: string
+      amountPaise?: number
+    }
+  | {
+      type: 'record_settlement'
+      fromId: string
+      toId: string
+      amountPaise: number
+      groupId: string
+      method: 'upi' | 'cash' | 'bank'
+    }
+  | {
+      type: 'confirm_payment'
+      settlementId: string
+      action: 'paid' | 'received'
+      memberName?: string
+      amountPaise?: number
+    }
+  | { type: 'open_group'; groupId: string }
+  | { type: 'switch_tab'; tab: 'expenses' | 'balances' | 'settle' }
+  | { type: 'show_balances'; groupId: string }
+  | { type: 'show_help'; text: string }
+
+export interface AiCommandResult {
+  ok: boolean
+  command?: AiCommand
+  reply: string
+  ambiguity?: string[]
+}
+
+export interface VoiceCommandContext {
+  myId: string
+  myName: string
+  groups: { id: string; name: string }[]
+  members: { id: string; name: string }[]
+  currentGroupId?: string
+}
+
+interface Member {
+  id: string
+  name: string
+}
+
+/* --------------------------------------------------------------- helpers */
+
+/** Resolve a spoken name to a member id from the group roster. */
+export function resolveName(name: string, members: Member[]): string | undefined {
+  const n = name.trim().toLowerCase()
+  if (!n) return undefined
+  const exact = members.find((m) => m.name.toLowerCase() === n)
+  if (exact) return exact.id
+  const first = members.find(
+    (m) => m.name.toLowerCase().split(/\s+/)[0] === n.split(/\s+/)[0],
+  )
+  if (first) return first.id
+  return members.find(
+    (m) =>
+      m.name.toLowerCase().includes(n) ||
+      n.includes(m.name.toLowerCase().split(/\s+/)[0]),
+  )?.id
+}
+
+/** Parse a rupee amount: "1256", "1.2k", "12 hundred", "500 rupees". */
+export function parseAmount(segment: string): number | null {
+  const cleaned = segment.replace(/[,\s]/g, '').toLowerCase()
+  let m = cleaned.match(/^([0-9]+(?:\.[0-9]+)?)(k|thousand)$/)
+  if (m) return Math.round(parseFloat(m[1]) * 1000 * 100)
+  m = cleaned.match(/^([0-9]+(?:\.[0-9]+)?)l(?:akh)?$/)
+  if (m) return Math.round(parseFloat(m[1]) * 100000 * 100)
+  m = cleaned.match(/^([0-9]+)\s*hundred$/)
+  if (m) return Math.round(parseInt(m[1], 10) * 100 * 100)
+  m = cleaned.match(/^([0-9]+(?:\.[0-9]{1,2})?)$/)
+  if (m) return Math.round(parseFloat(m[1]) * 100)
+  return null
+}
+
+interface AmountHit {
+  value: number
+  index: number
+  raw: string
+}
+
+/** Every rupee amount in the sentence, in order. */
+function amountsIn(text: string): AmountHit[] {
+  const hits: AmountHit[] = []
+  const re = /(?:₹|rs\.?\s*|rupees?\s*)?([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(k|thousand|lakh|l)?/gi
+  let match: RegExpExecArray | null
+  while ((match = re.exec(text)) !== null) {
+    const raw = match[0]
+    const value = parseAmount(`${match[1]}${match[2] ?? ''}`)
+    if (value === null || value < 1) continue
+    // "5 people", "3 ways", "18%" are not amounts.
+    const after = text.slice(match.index + raw.length, match.index + raw.length + 14)
+    if (/^\s*(?:people?|persons?|ways?|of\s+us|friends?|%|percent)/i.test(after)) continue
+    hits.push({ value, index: match.index, raw })
+  }
+  return hits
+}
+
+function firstAmount(text: string, minimumPaise = 100): number | null {
+  for (const hit of amountsIn(text)) {
+    if (hit.value >= minimumPaise) return hit.value
+  }
+  return null
+}
+
+interface NamedAmount {
+  name: string
+  amountPaise: number
+}
+
+/** "Priya 250", "Rahul had 300", "Priya ate 250" → named shares. */
+function extractNamedAmounts(text: string, members: Member[]): NamedAmount[] {
+  const results: NamedAmount[] = []
+  const clauses = text.split(/[,;.\n]+/).map((clause) => clause.trim()).filter(Boolean)
+  for (const clause of clauses) {
+    const mentioned = members.filter((member) => {
+      const first = member.name.toLowerCase().split(/\s+/)[0]
+      if (!first || first.length < 2) return false
+      return new RegExp(`\\b${escapeRegex(first)}\\b`, 'i').test(clause)
+    })
+    if (mentioned.length === 0) continue
+    for (const hit of amountsIn(clause)) {
+      if (hit.value < 100) continue
+      for (const member of mentioned) {
+        if (!results.some((entry) => entry.name === member.name)) {
+          results.push({ name: member.name, amountPaise: hit.value })
+        }
+      }
+    }
+  }
+  return results
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/* --------------------------------------------------------- count splits */
+
+interface CountGroup {
+  count: number
+  amountPaise: number | null
+  index: number
+}
+
+/**
+ * Understand count-based splits:
+ *   "2 people ate 250 each, 3 ate the rest"
+ *   "2 ate for cost 500 and 3 ate for cost each"
+ *   "5 people, 2 spent 500, remaining 3 split the rest"
+ * A null amount means "this group shares whatever is left".
+ */
+function extractCountGroups(text: string): CountGroup[] {
+  const groups: CountGroup[] = []
+  const taken: [number, number][] = []
+  const overlaps = (start: number, end: number) =>
+    taken.some(([a, b]) => start < b && end > a)
+
+  const withAmount =
+    /\b(\d{1,2})\s*(?:people?|persons?|of\s+us|friends?|guys?|members?)?\s+(?:ate|had|spent|paid|took|were|shared?|split)?\s*(?:for\s+)?(?:the\s+)?(?:cost|amount|total|bill)?\s*(?:of\s+)?(?:₹|rs\.?\s*)?([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(?:rupees?|rs\.?)?\s*(each)?/gi
+  let match: RegExpExecArray | null
+  while ((match = withAmount.exec(text)) !== null) {
+    const count = parseInt(match[1], 10)
+    const amount = parseAmount(match[2])
+    if (count < 1 || count > 30 || amount === null || amount < 100) continue
+    // "5 people" followed by a comma is not a group with an amount.
+    if (!match[3] && /\b(?:people|persons|of\s+us)\b/i.test(match[0]) && !/\b(?:ate|had|spent|paid|took|were|shared?|split)\b/i.test(match[0])) {
+      continue
+    }
+    const start = match.index
+    const end = start + match[0].length
+    if (overlaps(start, end)) continue
+    taken.push([start, end])
+    groups.push({
+      count,
+      amountPaise: match[3] ? amount * count : amount,
+      index: start,
+    })
+  }
+
+  const remainderOnly =
+    /\b(\d{1,2})\s*(?:people?|persons?|of\s+us|friends?|guys?|members?)?\s+(?:ate|had|spent|paid|took|were|shared?|split)\s*(?:for\s+)?(?:the\s+)?(?:cost|amount|total|bill)?\s*(?:of\s+)?(?:each|the\s+rest|rest|the\s+remaining|remaining|the\s+remainder)/gi
+  while ((match = remainderOnly.exec(text)) !== null) {
+    const count = parseInt(match[1], 10)
+    if (count < 1 || count > 30) continue
+    const start = match.index
+    const end = start + match[0].length
+    if (overlaps(start, end)) continue
+    taken.push([start, end])
+    groups.push({ count, amountPaise: null, index: start })
+  }
+
+  return groups.sort((a, b) => a.index - b.index)
+}
+
+/* ------------------------------------------------------------ settlements */
+
+const STOP_NAMES = new Set([
+  'me',
+  'my',
+  'i',
+  'the',
+  'a',
+  'an',
+  'someone',
+  'somebody',
+  'cash',
+  'upi',
+  'bank',
+  'online',
+  'dinner',
+  'lunch',
+  'food',
+  'bill',
+  'payment',
+  'money',
+  'rupees',
+  'rs',
+  'it',
+  'that',
+  'this',
+  'them',
+  'him',
+  'her',
+])
+
+function captureName(text: string, members: Member[]): string | null {
+  const patterns = [
+    /\b(?:from|by)\s+([A-Za-z][A-Za-z'-]{1,24})/i,
+    /\b(?:paid|sent|gave|transferred)\s+(?:me\s+)?(?:to\s+)?([A-Za-z][A-Za-z'-]{1,24})/i,
+    /\bto\s+([A-Za-z][A-Za-z'-]{1,24})/i,
+  ]
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    if (!match) continue
+    const candidate = match[1]
+    if (STOP_NAMES.has(candidate.toLowerCase())) continue
+    if (resolveName(candidate, members)) return candidate
+    // Keep an unrecognised name only when it was explicitly introduced
+    // ("from Rajesh"), not when it is a stray verb.
+    if (/\b(?:from|by)\b/i.test(match[0])) return candidate
+  }
+  // Last resort: a roster member mentioned anywhere in the sentence.
+  const mentioned = members.find((member) => {
+    const first = member.name.toLowerCase().split(/\s+/)[0]
+    return first.length > 2 && new RegExp(`\\b${escapeRegex(first)}\\b`, 'i').test(text)
+  })
+  return mentioned?.name ?? null
+}
+
+function manualId(prefix: 'from' | 'to', name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+  return `manual:${prefix}:${slug || 'someone'}`
+}
+
+/* ------------------------------------------------------------------ main */
+
+export function parseVoiceCommand(
+  transcript: string,
+  context: VoiceCommandContext,
+): AiCommandResult {
+  const t = transcript.trim()
+  const lower = t.toLowerCase()
+  const members = context.members
+  const groups = context.groups
+  const groupId = context.currentGroupId
+
+  if (!t) {
+    return { ok: false, reply: 'Say a command, like “Dinner 1200 split between us”.' }
+  }
+
+  // ---- Help -------------------------------------------------------------
+  if (/\b(help|what can you do|what can i say|commands|how do i)\b/.test(lower)) {
+    return {
+      ok: true,
+      command: { type: 'show_help', text: commandHelp() },
+      reply: "Here's what I can do — try any of these:",
+    }
+  }
+
+  // ---- Create a group ---------------------------------------------------
+  if (/\b(?:create|make|start|begin|set\s*up|open)\s+(?:a\s+)?(?:new\s+)?(?:group|trip|expense\s*group|split\s*group|dinner\s*group)\b/.test(lower)) {
+    let name = 'New Group'
+    const named = t.match(/\b(?:called|named|for)\s+(.+)$/i)
+    if (named) {
+      name = cleanGroupName(named[1])
+    } else {
+      const tail = t.match(/\b(?:group|trip)\s+(.+)$/i)
+      if (tail) name = cleanGroupName(tail[1])
+    }
+    return {
+      ok: true,
+      command: { type: 'create_group', name: name || 'New Group', emoji: guessEmoji(name) },
+      reply: `Creating “${name || 'New Group'}” — I'll set it up now.`,
+    }
+  }
+
+  // ---- Join a group -----------------------------------------------------
+  if (/\b(?:join|enter|get\s*into|become\s*part\s+of)\b/.test(lower)) {
+    const code = t.match(/\b([A-Z0-9]{4,8})\b/)
+    if (code) {
+      return {
+        ok: true,
+        command: { type: 'join_group', code: code[1].toUpperCase() },
+        reply: `Joining with code ${code[1].toUpperCase()}…`,
+      }
+    }
+    return {
+      ok: false,
+      reply: 'Say the invite code too, like “join with code 7KQ4M2”.',
+    }
+  }
+
+  // ---- Delete an expense ------------------------------------------------
+  const deleteMatch = lower.match(
+    /\b(?:delete|remove|cancel|erase|get\s*rid\s*of)\s+(?:that\s+|the\s+)?(?:last\s+|latest\s+|most\s+recent\s+)?(expense|bill|entry|item|thing|one)\b/,
+  )
+  if (deleteMatch) {
+    if (!groupId) {
+      return { ok: false, reply: 'Open a group first, then ask me to delete an expense.' }
+    }
+    return {
+      ok: true,
+      command: { type: 'delete_expense', expenseId: '__last__', groupId },
+      reply: 'Remove the most recent expense?',
+    }
+  }
+
+  // ---- Edit an expense --------------------------------------------------
+  if (/\b(?:edit|change|update|modify|fix|adjust)\b/.test(lower) && /\b(expense|bill|entry|amount|split|share|it|that)\b/.test(lower)) {
+    if (!groupId) {
+      return { ok: false, reply: 'Open a group first, then ask me to edit an expense.' }
+    }
+    const amountMatch = lower.match(
+      /(?:amount|total|cost|bill|to)\s*(?:is|to|be|of)?\s*(?:₹|rs\.?\s*)?([0-9][0-9,]*(?:\.[0-9]{1,2})?)/,
+    )
+    const newAmount = amountMatch ? parseAmount(amountMatch[1]) : null
+    const descMatch = t.match(/(?:rename|description|call\s+it)\s+(?:to\s+)?["“]?([^"”]{2,50})["”]?/i)
+    return {
+      ok: true,
+      command: {
+        type: 'edit_expense',
+        expenseId: '__last__',
+        groupId,
+        amountPaise: newAmount ?? undefined,
+        description: descMatch?.[1].trim(),
+      },
+      reply: newAmount
+        ? `Update the latest expense to ₹${(newAmount / 100).toFixed(2)}?`
+        : 'Update the latest expense?',
+    }
+  }
+
+  // ---- Confirm an existing payment -------------------------------------
+  const wantsConfirm = /^(?:yes[, ]+)?confirm\b|\bmark\b.*\b(?:paid|received)\b/i.test(lower)
+  if (wantsConfirm && /\b(?:payment|settlement|paid|received|got|pay)\b/.test(lower)) {
+    const received = /\b(?:received|got|collect(?:ed)?)\b/i.test(lower)
+    const name = captureName(t, members)
+    return {
+      ok: true,
+      command: {
+        type: 'confirm_payment',
+        settlementId: '__pending__',
+        action: received ? 'received' : 'paid',
+        memberName: name ?? undefined,
+        amountPaise: firstAmount(t) ?? undefined,
+      },
+      reply: `Confirming the ${received ? 'incoming' : 'outgoing'} payment${name ? ` with ${name}` : ''}…`,
+    }
+  }
+
+  // ---- Record a settlement ---------------------------------------------
+  const settlement = parseSettlement(t, lower, context)
+  if (settlement) return settlement
+
+  // ---- Switch tab -------------------------------------------------------
+  const tabMatch = lower.match(
+    /\b(?:go\s+to|show|open|switch\s+to|view|take\s+me\s+to)\s+(?:the\s+)?(expenses?|ledger|balances?|settle(?:ment)?s?)\s*(?:tab|page|screen)?\b/i,
+  )
+  if (tabMatch) {
+    const word = tabMatch[1].toLowerCase()
+    const tab: 'expenses' | 'balances' | 'settle' = word.startsWith('exp') || word.startsWith('led')
+      ? 'expenses'
+      : word.startsWith('bal')
+        ? 'balances'
+        : 'settle'
+    return { ok: true, command: { type: 'switch_tab', tab }, reply: `Switching to the ${tab} tab.` }
+  }
+
+  // ---- Add an expense ---------------------------------------------------
+  const expenseHint =
+    /\b(dinner|lunch|breakfast|coffee|tea|beer|wine|drinks?|food|cab|taxi|auto|uber|ola|hotel|stay|room|grocery|groceries|shop|shopping|movie|tickets?|fuel|petrol|rent|bill|total|amount|cost|expense)\b/i.test(
+      lower,
+    )
+  const hasAmount = amountsIn(lower).length > 0
+  const looksLikeSettlement = /\b(received|got|collected|joined|deleted|remove|edit|update|balance|who\s+owes)\b/.test(lower)
+
+  if ((expenseHint || hasAmount) && !looksLikeSettlement) {
+    const expense = parseExpense(t, lower, context)
+    if (expense) return expense
+  }
+
+  // ---- Open group -------------------------------------------------------
+  if (/\b(?:open|go\s*to|enter|show\s*me|load)\s+(?:the\s+)?(?:group|trip|expense|ledger|split)\b/.test(lower)) {
+    const target = groupId ?? groups[0]?.id
+    if (!target) return { ok: false, reply: 'You are not in a group yet — create one first.' }
+    return {
+      ok: true,
+      command: { type: 'open_group', groupId: target },
+      reply: `Opening ${groups.find((g) => g.id === target)?.name ?? 'the group'}…`,
+    }
+  }
+
+  // ---- Balances ---------------------------------------------------------
+  if (/\b(balance|balances|who\s*owes|what\s*(?:do|i)\s*(?:owe|get|have)|settled\s*up|square|position)\b/.test(lower)) {
+    const target = groupId ?? groups[0]?.id
+    if (!target) return { ok: false, reply: 'Open a group first, then I can show the balances.' }
+    return {
+      ok: true,
+      command: { type: 'show_balances', groupId: target },
+      reply: "Showing everyone's balance — open the Balances tab to see the full picture.",
+    }
+  }
+
+  // ---- Navigation -------------------------------------------------------
+  if (/\b(home|back|groups|main|start)\b/.test(lower)) {
+    const target = groups[0]?.id
+    if (!target) return { ok: false, reply: 'You have no groups yet.' }
+    return { ok: true, command: { type: 'open_group', groupId: target }, reply: 'Taking you to your groups.' }
+  }
+
+  return {
+    ok: false,
+    reply: `I heard “${transcript}” but I'm not sure what you need. Try:
+      • “Create a new group called Goa trip”
+      • “Dinner 1256, split between 5 of us”
+      • “Bill 1256, GST 60, 2 ate 500, 3 split the rest”
+      • “I got 500 rupees from Priya”
+      • “Show me the balances”
+      • “Delete the last expense”`,
+  }
+}
+
+/* --------------------------------------------------------------- expense */
+
+function parseExpense(
+  t: string,
+  lower: string,
+  context: VoiceCommandContext,
+): AiCommandResult | null {
+  const members = context.members
+
+  // ---- GST: fixed amount or percentage --------------------------------
+  let gstPaise = 0
+  const gstFixed = lower.match(
+    /(?:gst|tax)\s*(?:total|amount|of|is|:)?\s*(?:₹|rs\.?\s*)?([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(?:rupees?|rs\.?)?(?!\s*%)/i,
+  )
+  if (gstFixed) {
+    const value = parseAmount(gstFixed[1])
+    if (value !== null) gstPaise = value
+  }
+  const gstPercent = lower.match(/(?:gst|tax)\s*([0-9]{1,2}(?:\.[0-9]{1,2})?)\s*%/i)
+  const gstNote = gstPercent
+    ? `GST ${gstPercent[1]}%`
+    : gstPaise > 0
+      ? `GST ₹${(gstPaise / 100).toFixed(0)}`
+      : ''
+
+  // ---- Base total ------------------------------------------------------
+  // The headline total is almost always the largest number in the sentence:
+  // itemised shares, per-person amounts and the GST line are all smaller.
+  let totalAmount: number | null = null
+  for (const hit of amountsIn(lower)) {
+    if (hit.value >= 100 && (totalAmount === null || hit.value > totalAmount)) {
+      totalAmount = hit.value
+    }
+  }
+
+  const countGroups = extractCountGroups(lower)
+  const namedShares = extractNamedAmounts(t, members)
+
+  if (totalAmount === null) {
+    // No headline total: sum whatever shares were stated.
+    const stated =
+      namedShares.reduce((sum, entry) => sum + entry.amountPaise, 0) +
+      countGroups.reduce((sum, group) => sum + (group.amountPaise ?? 0), 0)
+    if (stated > 0) totalAmount = stated
+  }
+  if (totalAmount === null || totalAmount < 100) return null
+
+  // GST is normally already inside a stated bill total. Treat it as extra only
+  // when the speaker says so, or when they read it as its own total line
+  // ("gst total 60") or break the bill into count groups.
+  const gstExplicit = /\b(?:plus|extra|add(?:ed)?|excluding|before\s+gst|on\s+top)\b[^.]{0,24}\b(?:gst|tax)\b/i.test(lower)
+  const gstOwnTotal = /\b(?:gst|tax)\s+(?:total|amount)\b|\btotal\s+(?:gst|tax)\b/i.test(lower)
+  const gstOnBreakdown = countGroups.length > 0 && gstPaise > 0 && !gstPercent
+  if (!gstPercent && gstPaise > 0 && (gstExplicit || gstOwnTotal || gstOnBreakdown)) {
+    totalAmount += gstPaise
+  }
+
+  // ---- Description -----------------------------------------------------
+  let description = 'Expense'
+  const descMatch = t.match(/^([A-Za-z][\w\s'-]{2,50}?)(?:\s+\d|,)/)
+  if (
+    descMatch &&
+    !/^(bill|total|amount|split|the|a|an|my|all|each|between|among|for|add|expense)$/i.test(
+      descMatch[1].trim(),
+    )
+  ) {
+    description = descMatch[1].trim()
+  } else {
+    const parts = t.split(/[,;.]/).map((part) => part.trim()).filter(Boolean)
+    for (const part of parts) {
+      if (/[0-9]/.test(part)) continue
+      if (
+        part.length > 3 &&
+        /[A-Za-z]/.test(part[0]) &&
+        !/^(split|between|among|for|all|the|and|gst|tax|rupees?|add|expense)/i.test(part)
+      ) {
+        description = part.slice(0, 60)
+        break
+      }
+    }
+  }
+
+  // ---- Split -----------------------------------------------------------
+  let splitMode: 'equal' | 'exact' | 'percent' = 'equal'
+  let participantIds = members.map((member) => member.id)
+  let splitValues: Record<string, number> | undefined
+
+  if (namedShares.length > 0) {
+    splitMode = 'exact'
+    const values: Record<string, number> = {}
+    const assigned = new Set<string>()
+    let assignedPaise = 0
+    for (const share of namedShares) {
+      const id = resolveName(share.name, members)
+      if (!id || assigned.has(id)) continue
+      values[id] = share.amountPaise
+      assigned.add(id)
+      assignedPaise += share.amountPaise
+    }
+    const remaining = members.filter((member) => !assigned.has(member.id))
+    const leftover = totalAmount - assignedPaise
+    if (leftover > 0 && remaining.length > 0) {
+      const each = Math.floor(leftover / remaining.length)
+      for (const member of remaining) values[member.id] = each
+      const actual = Object.values(values).reduce((sum, value) => sum + value, 0)
+      const last = remaining[remaining.length - 1]
+      if (last) values[last.id] += totalAmount - actual
+    }
+    participantIds = Object.keys(values)
+    splitValues = values
+  } else if (countGroups.length > 0) {
+    splitMode = 'exact'
+    const values: Record<string, number> = {}
+    const pool = [...members]
+    let assignedTotal = 0
+    const remainderGroups: number[] = []
+
+    for (const group of countGroups) {
+      const slice = pool.splice(0, group.count)
+      if (group.amountPaise === null) {
+        remainderGroups.push(slice.length)
+        // Remember the members for the leftover pass.
+        ;(group as CountGroup & { memberIds?: string[] }).memberIds = slice.map((m) => m.id)
+        continue
+      }
+      const each = Math.floor(group.amountPaise / Math.max(1, group.count))
+      for (const member of slice) {
+        values[member.id] = each
+        assignedTotal += each
+      }
+    }
+
+    let leftover = totalAmount - assignedTotal
+    let recipients: string[] = []
+    for (const group of countGroups) {
+      if (group.amountPaise === null) {
+        const ids = (group as CountGroup & { memberIds?: string[] }).memberIds ?? []
+        recipients.push(...ids)
+      }
+    }
+    if (recipients.length === 0) recipients = pool.map((member) => member.id)
+    if (leftover > 0 && recipients.length > 0) {
+      const each = Math.floor(leftover / recipients.length)
+      for (const id of recipients) values[id] = (values[id] ?? 0) + each
+      const actual = Object.values(values).reduce((sum, value) => sum + value, 0)
+      const last = recipients[recipients.length - 1]
+      if (last) values[last] = (values[last] ?? 0) + (totalAmount - actual)
+    }
+    // Any member not covered by a group still needs a share.
+    const uncovered = pool.filter((member) => !(member.id in values))
+    if (uncovered.length > 0) {
+      const actual = Object.values(values).reduce((sum, value) => sum + value, 0)
+      const rest = totalAmount - actual
+      if (rest > 0) {
+        const each = Math.floor(rest / uncovered.length)
+        for (const member of uncovered) values[member.id] = each
+        const finalActual = Object.values(values).reduce((sum, value) => sum + value, 0)
+        const last = uncovered[uncovered.length - 1]
+        if (last) values[last.id] += totalAmount - finalActual
+      }
+    }
+    participantIds = Object.keys(values)
+    splitValues = values
+  } else if (/\b(percent|percentage|%)\b/i.test(lower)) {
+    splitMode = 'percent'
+  } else {
+    splitMode = 'equal'
+    const between = lower.match(
+      /(?:between|among|for|split)\s+(\d{1,2})\s*(?:people?|persons?|of\s+us|ways?|friends?)?/,
+    )
+    if (between) {
+      const n = Math.min(parseInt(between[1], 10), members.length)
+      participantIds = members.slice(0, n).map((member) => member.id)
+    }
+  }
+
+  const detail =
+    splitMode === 'exact' && splitValues
+      ? `exact split (${Object.entries(splitValues)
+          .map(([id, paise]) => `${members.find((m) => m.id === id)?.name ?? id} ₹${(paise / 100).toFixed(0)}`)
+          .join(', ')})`
+      : splitMode === 'equal'
+        ? `equally among ${participantIds.length} ${participantIds.length === 1 ? 'person' : 'people'}`
+        : 'by percentage'
+
+  return {
+    ok: true,
+    command: {
+      type: 'add_expense',
+      description,
+      amountPaise: totalAmount,
+      splitMode,
+      participantIds,
+      payerId: context.myId,
+      notes: gstNote,
+      splitValues,
+    },
+    reply: `Add "${description}" for ₹${(totalAmount / 100).toFixed(2)} — ${detail}.`,
+  }
+}
+
+/* ------------------------------------------------------------ settlement */
+
+function parseSettlement(
+  t: string,
+  lower: string,
+  context: VoiceCommandContext,
+): AiCommandResult | null {
+  const members = context.members
+  const mentionsMember = members.some((member) => {
+    const first = member.name.toLowerCase().split(/\s+/)[0]
+    return first.length > 1 && new RegExp(`\\b${escapeRegex(first)}\\b`, 'i').test(lower)
+  })
+  const received = /\b(?:got|received|collected|collect)\b/.test(lower)
+  const paidMe = /\b(?:paid|sent|gave|transferred)\s+me\b/.test(lower)
+  const settled = /\b(?:settled|settlement|settle\s+up)\b/.test(lower)
+  const iPaid =
+    /\b(?:i|me)\b[^.]{0,24}\b(?:paid|sent|gave|transferred)\b/.test(lower) ||
+    /^(?:paid|sent|gave|transferred)\b/.test(lower)
+  const explicitName = captureName(t, members)
+  const intent =
+    received ||
+    paidMe ||
+    (settled && (mentionsMember || explicitName !== null)) ||
+    (iPaid && (mentionsMember || explicitName !== null))
+
+  if (!intent) return null
+  if (!context.currentGroupId) {
+    return { ok: false, reply: 'Open a group first, then I can record the payment.' }
+  }
+
+  const amount = firstAmount(t)
+  if (amount === null) return null
+
+  const name = explicitName
+  const resolved = name ? resolveName(name, members) : undefined
+
+  // Who paid whom?
+  if (iPaid && !received && !paidMe) {
+    const to = resolved ?? (name ? manualId('to', name) : manualId('to', 'someone'))
+    return {
+      ok: true,
+      command: {
+        type: 'record_settlement',
+        fromId: context.myId,
+        toId: to,
+        amountPaise: amount,
+        groupId: context.currentGroupId,
+        method: to.startsWith('manual:') ? 'cash' : 'upi',
+      },
+      reply: `Record ₹${(amount / 100).toFixed(2)} paid to ${name ?? 'someone'}?`,
+    }
+  }
+
+  if (resolved) {
+    return {
+      ok: true,
+      command: {
+        type: 'record_settlement',
+        fromId: resolved,
+        toId: context.myId,
+        amountPaise: amount,
+        groupId: context.currentGroupId,
+        method: 'upi',
+      },
+      reply: `Record ₹${(amount / 100).toFixed(2)} received from ${name}?`,
+    }
+  }
+
+  const manualName = name ?? 'Someone'
+  return {
+    ok: true,
+    command: {
+      type: 'record_settlement',
+      fromId: manualId('from', manualName),
+      toId: context.myId,
+      amountPaise: amount,
+      groupId: context.currentGroupId,
+      method: 'cash',
+    },
+    reply: `Record ₹${(amount / 100).toFixed(2)} received from ${manualName}? They are not in the group yet, but the ledger will still update.`,
+  }
+}
+
+/* ---------------------------------------------------------------- extras */
+
+function cleanGroupName(raw: string): string {
+  return raw
+    .replace(/[.!?]+$/, '')
+    .replace(/^(the|a|an)\s+/i, '')
+    .trim()
+    .slice(0, 40)
+}
+
+function guessEmoji(name: string): string {
+  const lower = name.toLowerCase()
+  if (/goa|beach|sea|pool|summer/i.test(lower)) return '🏖️'
+  if (/delhi|monday|office|work|business/i.test(lower)) return '💼'
+  if (/rajasthan|jaipur|heritage|palace/i.test(lower)) return '🏜️'
+  if (/kerala|backwater|trail|hike|hill/i.test(lower)) return '🌿'
+  if (/wedding|party|celebration|birthday/i.test(lower)) return '🎉'
+  if (/cricket|match|stadium|sport/i.test(lower)) return '🏏'
+  if (/train|rail|journey|road|drive|car|taxi/i.test(lower)) return '🚗'
+  if (/dinner|lunch|food|restaurant|eats/i.test(lower)) return '🍕'
+  if (/ski|snow|winter/i.test(lower)) return '🎿'
+  if (/study|exam|course|class|college|school/i.test(lower)) return '🎓'
+  return '🧾'
+}
+
+export function commandHelp(): string {
+  return [
+    'Create: "Create a group called Mumbai weekend"',
+    'Join: "Join with code ABC123"',
+    'Add expense: "Dinner 1256 rupees, split between 5 of us"',
+    'Named shares: "Lunch 800, Priya 250, Rahul 300, rest equal"',
+    'GST + groups: "Bill 1256, GST 60, 2 ate for 500, 3 split the rest"',
+    'Count split: "5 people, 2 ate 250 each, 3 ate the rest"',
+    'Record payment: "I got 500 rupees from Priya" or "I paid Priya 800"',
+    'Confirm payment: "Confirm I received 500"',
+    'Delete: "Delete the last expense" or "Remove that bill"',
+    'Edit: "Edit the amount to 1200"',
+    'Balances: "Show me the balances" or "Who owes what?"',
+    'Switch tab: "Go to balances" or "Show settle tab"',
+  ].join('\n')
+}

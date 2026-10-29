@@ -24,7 +24,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient'
 import * as Haptics from 'expo-haptics'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
-import { colors, elevation, gradients, motion, radius, spacing, type } from '../theme'
+import { avatarPalette, colors, elevation, gradients, motion, radius, spacing, tints, type } from '../theme'
 
 /* ------------------------------------------------------------------ *
  * Motion helpers
@@ -258,13 +258,69 @@ export function Screen({
   extraBottom?: number
 }) {
   const padding = padded ? { paddingHorizontal: spacing(5) } : undefined
+  const drift = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(drift, {
+          toValue: 1,
+          duration: 14_000,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(drift, {
+          toValue: 0,
+          duration: 14_000,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ]),
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [drift])
 
   return (
     <View style={styles.screen}>
       <LinearGradient colors={gradients.canvas} style={StyleSheet.absoluteFill} />
       <View pointerEvents="none" style={styles.orbWrap}>
-        <View style={[styles.orb, styles.orbMint]} />
-        <View style={[styles.orb, styles.orbViolet]} />
+        <Animated.View
+          style={[
+            styles.orb,
+            styles.orbMint,
+            {
+              transform: [
+                { translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [0, 26] }) },
+                { translateX: drift.interpolate({ inputRange: [0, 1], outputRange: [0, -18] }) },
+              ],
+            },
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.orb,
+            styles.orbViolet,
+            {
+              transform: [
+                { translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [0, -22] }) },
+                { translateX: drift.interpolate({ inputRange: [0, 1], outputRange: [0, 16] }) },
+              ],
+            },
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.orb,
+            styles.orbAmber,
+            {
+              opacity: drift.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }),
+              transform: [
+                { translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [0, -30] }) },
+              ],
+            },
+          ]}
+        />
       </View>
       <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1 }}>
         {scroll ? (
@@ -343,7 +399,7 @@ export function Card({
     tone === 'raised'
       ? { backgroundColor: colors.surfaceAlt, borderColor: colors.border }
       : tone === 'mint'
-        ? { backgroundColor: '#0f2e24', borderColor: '#2b5b49' }
+        ? { backgroundColor: tints.mint.fill, borderColor: tints.mint.border }
         : { backgroundColor: colors.surface, borderColor: colors.borderSoft }
   return <View style={[styles.card, toneStyle, style]}>{children}</View>
 }
@@ -358,11 +414,11 @@ export function Pill({
   icon?: React.ReactNode
 }) {
   const map = {
-    muted: { bg: '#17332a', fg: colors.muted },
-    ok: { bg: '#123f30', fg: colors.accent },
-    warn: { bg: '#3c2f12', fg: colors.warn },
-    bad: { bg: '#3d211b', fg: colors.coral },
-    info: { bg: '#122e3d', fg: colors.info },
+    muted: { bg: tints.neutral.fill, fg: colors.muted },
+    ok: { bg: tints.accent.fill, fg: colors.accent },
+    warn: { bg: tints.warn.fill, fg: colors.warn },
+    bad: { bg: tints.bad.fill, fg: colors.coral },
+    info: { bg: tints.info.fill, fg: colors.info },
   }[tone]
   return (
     <View style={[styles.pill, { backgroundColor: map.bg }]}>
@@ -383,7 +439,7 @@ export function Avatar({
   size?: number
   ring?: boolean
 }) {
-  const palette = ['#2f8f70', '#c8553d', '#3d7fb8', '#b8892a', '#7a4fa0', '#2d8a9a', '#a54e75', '#5c7b3a']
+  const palette = avatarPalette
   const initials =
     name
       .trim()
@@ -523,7 +579,7 @@ export function Button({
             {
               backgroundColor: variant === 'soft' ? colors.surfaceAlt : 'transparent',
               borderWidth: 1,
-              borderColor: isDanger ? '#4a2620' : colors.border,
+              borderColor: isDanger ? tints.bad.border : colors.border,
             },
           ]}
         >
@@ -554,9 +610,9 @@ export function IconButton({
           borderRadius: 20,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: tone === 'mint' ? '#123f30' : 'rgba(255,255,255,0.05)',
+          backgroundColor: tone === 'mint' ? tints.accent.fill : colors.glass,
           borderWidth: 1,
-          borderColor: tone === 'mint' ? '#2b6b52' : colors.borderSoft,
+          borderColor: tone === 'mint' ? tints.accent.border : colors.borderSoft,
         }}
       >
         {icon}
@@ -859,9 +915,9 @@ export function Sheet({
 
 export function Banner({ tone, children }: { tone: 'error' | 'info' | 'ok'; children: React.ReactNode }) {
   const map = {
-    error: { bg: '#3a1d17', fg: colors.coral, border: '#5a2b22' },
-    info: { bg: '#122b3c', fg: colors.info, border: '#1d4a63' },
-    ok: { bg: '#12301f', fg: colors.accent, border: '#1f5a3c' },
+    error: { bg: tints.bad.fill, fg: colors.coral, border: tints.bad.border },
+    info: { bg: tints.info.fill, fg: colors.info, border: tints.info.border },
+    ok: { bg: tints.ok.fill, fg: colors.accent, border: tints.ok.border },
   }[tone]
   return (
     <FadeIn offset={-6}>
@@ -943,8 +999,8 @@ export function Toast({ message, tone }: { message: string; tone: 'ok' | 'error'
         styles.toast,
         {
           bottom: insets.bottom + 92,
-          backgroundColor: tone === 'ok' ? '#123f30' : '#3a1d17',
-          borderColor: tone === 'ok' ? '#2b6b52' : '#5a2b22',
+          backgroundColor: tone === 'ok' ? tints.accent.fill : tints.bad.fill,
+          borderColor: tone === 'ok' ? tints.accent.border : tints.bad.border,
           opacity: progress,
           transform: [
             { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) },
@@ -970,14 +1026,21 @@ const styles = StyleSheet.create({
     height: 320,
     top: -150,
     right: -110,
-    backgroundColor: 'rgba(79, 227, 172, 0.10)',
+    backgroundColor: colors.mintWash,
   },
   orbViolet: {
     width: 260,
     height: 260,
     bottom: -120,
     left: -100,
-    backgroundColor: 'rgba(183, 155, 255, 0.07)',
+    backgroundColor: colors.violetWash,
+  },
+  orbAmber: {
+    width: 220,
+    height: 220,
+    top: 180,
+    left: -130,
+    backgroundColor: colors.coralWash,
   },
 
   title: { ...type.title, color: colors.text, marginTop: spacing(1) },

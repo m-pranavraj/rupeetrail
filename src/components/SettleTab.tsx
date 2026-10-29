@@ -187,14 +187,6 @@ export function SettleTab({
                         I received it
                       </button>
                     )}
-                    {iAmPayer && !s.payerConfirmedAt && (
-                      <button
-                        className="btn btn--tiny btn--ghost"
-                        onClick={() => advanceSettlement(s.id, currentMemberId ?? 'manual:payer', 'payer_confirmed')}
-                      >
-                        Confirm received
-                      </button>
-                    )}
                     <button
                       className="btn btn--tiny btn--ghost"
                       onClick={() => advanceSettlement(s.id, currentMemberId ?? 'manual:payer', 'disputed')}

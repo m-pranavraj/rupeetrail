@@ -101,5 +101,5 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceAlt,
     borderRadius: radius.md,
   },
-  hint: { color: '#5f7a6d', fontSize: 12, lineHeight: 17, marginTop: spacing(3) },
+  hint: { color: colors.mutedDim, fontSize: 12, lineHeight: 17, marginTop: spacing(3) },
 })

@@ -2,11 +2,19 @@ name: Android build & release
 
 on:
   push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/android.yml'
     tags: ['v*']
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -16,12 +24,13 @@ jobs:
       # fixed Expo debug key, which is the same certificate the existing
       # sideloaded releases use, so updates still install over them.
       RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+      GRADLE_OPTS: -Xmx4g -Dorg.gradle.daemon=false
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: mobile/package-lock.json
 
@@ -29,6 +38,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
 
       - name: Install dependencies
         working-directory: mobile
@@ -60,7 +73,7 @@ jobs:
           config.expo.version = name
           fs.writeFileSync('app.json', JSON.stringify(config, null, 2) + '\n')
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `code=${code}\nname=${name}\n`)
-          console.log(`versionCode=${code}`)
+          console.log(`versionCode=${code} versionName=${name}`)
           NODE
 
       - name: Prebuild Android
@@ -70,6 +83,27 @@ jobs:
           EXPO_PUBLIC_VERSION_CODE: ${{ steps.version.outputs.code }}
           EXPO_PUBLIC_VERSION_NAME: ${{ steps.version.outputs.name }}
         run: npx expo prebuild --platform android --no-install
+
+      # A universal APK carries every ABI and lands around 110 MB. Splitting by
+      # ABI gives a ~40 MB arm64 build (every modern phone) plus a 32-bit build.
+      - name: Split the APK by ABI
+        working-directory: mobile/android/app
+        run: |
+          node - <<'NODE'
+          const fs = require('fs')
+          const path = 'build.gradle'
+          let gradle = fs.readFileSync(path, 'utf8')
+          if (gradle.includes('splits {')) {
+            console.log('ABI splits already present')
+            process.exit(0)
+          }
+          gradle = gradle.replace(
+            /android\s*{/,
+            `android {\n    splits {\n        abi {\n            enable true\n            reset()\n            include "armeabi-v7a", "arm64-v8a"\n            universalApk false\n        }\n    }`
+          )
+          fs.writeFileSync(path, gradle)
+          console.log('ABI splits added')
+          NODE
 
       - name: Decode keystore
         if: env.RELEASE_KEYSTORE_BASE64 != ''
@@ -106,39 +140,73 @@ jobs:
           }
           NODE
 
-      - name: Build release APK
+      - name: Build release APKs
         working-directory: mobile/android
         env:
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleRelease --no-daemon
 
-      - name: Verify the APK
+      - name: Verify the APKs
         working-directory: mobile/android
         run: |
-          APK=app/build/outputs/apk/release/app-release.apk
-          test -f "$APK"
-          ls -lh "$APK"
-          sha256sum "$APK" | tee app/build/outputs/apk/release/app-release.apk.sha256
-          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify --print-certs "$APK" | head -5
-          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt" dump badging "$APK" | grep -E "package:|application-label:" | head -3
+          OUT=app/build/outputs/apk/release
+          ARM64=$OUT/app-arm64-v8a-release.apk
+          ARM32=$OUT/app-armeabi-v7a-release.apk
+          test -f "$ARM64"
+          test -f "$ARM32"
+          ls -lh "$OUT"/*.apk
+          cp "$ARM64" "$OUT/app-release.apk"
+          sha256sum "$ARM64" | sed "s#  .*#  app-release.apk#" > "$OUT/app-release.apk.sha256"
+          sha256sum "$ARM32" | sed "s#  .*#  app-arm32.apk#" > "$OUT/app-arm32.apk.sha256"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$ARM64" | head -5
+          "$BUILD_TOOLS/aapt" dump badging "$ARM64" | grep -E "package:|application-label:|native-code:" | head -4
 
-      - name: Publish to the stable release
+      - name: Publish the stable release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CODE: ${{ steps.version.outputs.code }}
         run: |
           # The deployed Worker's update manifest points at this stable URL, so
           # replacing the asset here ships a new APK without touching Cloudflare.
           gh release view main >/dev/null 2>&1 || gh release create main \
             --title "RupeeSplit (stable)" \
-            --notes "Latest signed RupeeSplit Android build." || true
-          gh release upload main mobile/android/app/build/outputs/apk/release/app-release.apk#app-release.apk --clobber
-          gh release upload main mobile/android/app/build/outputs/apk/release/app-release.apk.sha256#app-release.apk.sha256 --clobber
+            --notes "Latest signed RupeeSplit Android build for in-app updates."
+          gh release edit main --draft=false --prerelease=false --latest
+          OUT=mobile/android/app/build/outputs/apk/release
+          gh release upload main \
+            "$OUT/app-release.apk#app-release.apk" \
+            "$OUT/app-release.apk.sha256#app-release.apk.sha256" \
+            "$OUT/app-armeabi-v7a-release.apk#app-arm32.apk" \
+            "$OUT/app-arm32.apk.sha256#app-arm32.apk.sha256" \
+            --clobber
 
-      - name: Upload build artifact
+      - name: Publish a versioned release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NAME: ${{ steps.version.outputs.name }}
+        run: |
+          OUT=mobile/android/app/build/outputs/apk/release
+          TAG="v$NAME"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+            --title "RupeeSplit $NAME" \
+            --notes "RupeeSplit $NAME (versionCode ${{ steps.version.outputs.code }}). arm64 is the main build; arm32 covers older phones." \
+            --latest=false
+          gh release upload "$TAG" \
+            "$OUT/app-release.apk#RupeeSplit-$NAME-arm64.apk" \
+            "$OUT/app-release.apk.sha256#RupeeSplit-$NAME-arm64.apk.sha256" \
+            "$OUT/app-armeabi-v7a-release.apk#RupeeSplit-$NAME-arm32.apk" \
+            "$OUT/app-arm32.apk.sha256#RupeeSplit-$NAME-arm32.apk.sha256" \
+            --clobber
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rupeesplit-apk-${{ github.run_number }}
-          path: mobile/android/app/build/outputs/apk/release/app-release.apk
+          path: |
+            mobile/android/app/build/outputs/apk/release/app-release.apk
+            mobile/android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
+            mobile/android/app/build/outputs/apk/release/app-release.apk.sha256
           retention-days: 30

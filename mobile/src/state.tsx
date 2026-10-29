@@ -40,8 +40,8 @@ interface Store {
   signIn(input: { phone: string; pin: string }): Promise<boolean>
   signOut(): Promise<void>
 
-  createGroup(input: { name: string; emoji: string }): Promise<boolean>
-  joinGroup(code: string): Promise<boolean>
+  createGroup(input: { name: string; emoji: string }): Promise<string | null>
+  joinGroup(code: string): Promise<string | null>
 
   openGroup(groupId: string): Promise<void>
   closeGroup(): void
@@ -52,7 +52,7 @@ interface Store {
   removeExpense(expenseId: string): Promise<boolean>
   addPerson(name: string, upiId: string): Promise<boolean>
   removePerson(memberId: string): Promise<boolean>
-  settle(input: { from: string; to: string; amountPaise: number }): Promise<boolean>
+  settle(input: { from: string; to: string; amountPaise: number; method?: Settlement['method'] }): Promise<boolean>
   confirmSettlement(id: string, action: 'paid' | 'received' | 'dispute'): Promise<boolean>
   acknowledge(expenseId: string, status: 'acknowledged' | 'questioned', reason?: string): Promise<boolean>
   resolveDispute(expenseId: string, resolution: string): Promise<boolean>
@@ -230,9 +230,10 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
         })
         remember(snapshot, snapshot.token)
         setNotice('Group created. Share the invite code.')
-        return true
+        return snapshot.group.id
       } catch (cause) {
-        return fail(cause)
+        fail(cause)
+        return null
       } finally {
         setBusy(false)
       }
@@ -253,9 +254,10 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
         })
         remember(snapshot, snapshot.token)
         setNotice('You are in.')
-        return true
+        return snapshot.group.id
       } catch (cause) {
-        return fail(cause)
+        fail(cause)
+        return null
       } finally {
         setBusy(false)
       }
@@ -403,15 +405,33 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   )
 
   const settle = useCallback<Store['settle']>(
-    ({ from, to, amountPaise }) =>
-      mutate(({ membership }) =>
-        api.addSettlement(membership.groupId, membership, {
+    ({ from, to, amountPaise, method = 'upi' }) =>
+      mutate(async ({ membership }) => {
+        const snapshot = await api.addSettlement(membership.groupId, membership, {
           from,
           to,
           amountPaise,
-          method: 'upi',
-        }),
-      ),
+          method,
+        })
+        const meId = membership.memberId
+        const action =
+          from.startsWith('manual:') && to === meId
+            ? 'received'
+            : to.startsWith('manual:') && from === meId
+              ? 'paid'
+              : null
+
+        if (!action) return snapshot
+
+        // A manually named counterparty has no phone to confirm from, so the
+        // side this device represents confirms immediately. The balance moves
+        // the moment the payment is recorded.
+        const created = [...snapshot.settlements]
+          .filter((entry) => entry.from === from && entry.to === to && entry.amountPaise === amountPaise)
+          .sort((a, b) => b.createdAt - a.createdAt)[0]
+        if (!created) return snapshot
+        return api.confirmSettlement(membership.groupId, membership, created.id, action)
+      }),
     [mutate],
   )
 
@@ -493,16 +513,18 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove()
   }, [refresh])
 
-  // Keep the open ledger fresh even when the socket cannot attach (some
-  // networks block WebSockets). The socket, when it works, is faster than this.
+  // Keep the open ledger fresh only when the socket cannot attach (some
+  // networks block WebSockets). While the socket is live its broadcasts are
+  // the source of truth, so there is no periodic polling.
   const openGroupId = active?.membership.groupId
+  const openLive = active?.live
   useEffect(() => {
-    if (!openGroupId) return
+    if (!openGroupId || openLive === 'live') return
     const timer = setInterval(() => {
       void refresh()
     }, 12_000)
     return () => clearInterval(timer)
-  }, [openGroupId, refresh])
+  }, [openGroupId, openLive, refresh])
 
   const value = useMemo<Store>(
     () => ({

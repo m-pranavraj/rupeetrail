@@ -117,7 +117,7 @@ interface StoreValue {
   removeMember: (groupId: string, memberId: string) => Promise<boolean>
   addExpense: (groupId: string, input: NewExpenseInput) => Promise<boolean>
   updateExpense: (groupId: string, expenseId: string, input: NewExpenseInput) => Promise<boolean>
-  deleteExpense: (groupId: string, expenseId: string) => void
+  deleteExpense: (groupId: string, expenseId: string) => Promise<boolean>
   setAck: (groupId: string, expenseId: string, memberId: MemberId, status: AckStatus) => void
   raiseDispute: (groupId: string, expenseId: string, memberId: MemberId, reason: string) => void
   resolveDispute: (groupId: string, expenseId: string, resolution: string) => void
@@ -129,7 +129,11 @@ interface StoreValue {
     method: Settlement['method'],
     note?: string,
   ) => Promise<boolean>
-  advanceSettlement: (settlementId: string, memberId: MemberId, target: SettlementStatus) => void
+  advanceSettlement: (
+    settlementId: string,
+    memberId: MemberId,
+    target: SettlementStatus,
+  ) => Promise<boolean>
   renameGroup: (groupId: string, name: string, emoji: string) => Promise<boolean>
   setGroupStatus: (groupId: string, status: GroupStatus) => Promise<boolean>
 }
@@ -727,10 +731,12 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   )
 
   const deleteExpense = useCallback(
-    (groupId: string, expenseId: string) => {
-      void withGroup(groupId, (auth) => apiDeleteExpense(groupId, auth, expenseId))
+    async (groupId: string, expenseId: string) => {
+      const ok = await withGroup(groupId, (auth) => apiDeleteExpense(groupId, auth, expenseId))
+      if (ok) await refresh()
+      return ok
     },
-    [withGroup],
+    [withGroup, refresh],
   )
 
   const setAck = useCallback(
@@ -787,9 +793,9 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
   )
 
   const advanceSettlement = useCallback(
-    (settlementId: string, _memberId: MemberId, target: SettlementStatus) => {
+    async (settlementId: string, _memberId: MemberId, target: SettlementStatus) => {
       const groupId = activeIdRef.current
-      if (!groupId) return
+      if (!groupId) return false
       const action =
         target === 'payer_confirmed'
           ? 'paid'
@@ -798,12 +804,14 @@ export function LedgerProvider({ children }: { children: React.ReactNode }) {
             : target === 'disputed'
               ? 'dispute'
               : null
-      if (!action) return
-      void withGroup(groupId, (auth) =>
+      if (!action) return false
+      const ok = await withGroup(groupId, (auth) =>
         apiConfirmSettlement(groupId, auth, settlementId, action),
       )
+      if (ok) await refresh()
+      return ok
     },
-    [withGroup],
+    [withGroup, refresh],
   )
 
   const renameGroup = useCallback(

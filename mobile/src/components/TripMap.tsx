@@ -175,7 +175,7 @@ const styles = StyleSheet.create({
   wrap: {
     borderRadius: radius.lg,
     overflow: 'hidden',
-    backgroundColor: '#0c1d17',
+    backgroundColor: colors.bgElevated,
     borderWidth: 1,
     borderColor: colors.borderSoft,
   },
@@ -220,16 +220,16 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     elevation: 4,
   },
-  pinText: { color: '#04140f', fontSize: 9.5, fontWeight: '900' },
+  pinText: { color: colors.white, fontSize: 9.5, fontWeight: '900' },
   pinLabel: {
     marginTop: 3,
-    backgroundColor: 'rgba(5, 18, 13, 0.82)',
+    backgroundColor: colors.overlay,
     paddingHorizontal: spacing(1.5),
     paddingVertical: 2,
     borderRadius: radius.xs,
     maxWidth: 110,
   },
-  pinLabelText: { color: '#dfeee7', fontSize: 8.5, fontWeight: '700' },
+  pinLabelText: { color: colors.text, fontSize: 8.5, fontWeight: '700' },
   zoomBadge: {
     position: 'absolute',
     right: spacing(2.5),

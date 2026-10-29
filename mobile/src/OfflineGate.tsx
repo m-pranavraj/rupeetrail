@@ -44,7 +44,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing(4),
   },
   hint: {
-    color: '#5f7a6d',
+    color: colors.mutedDim,
     fontSize: 12,
     lineHeight: 17,
     textAlign: 'center',

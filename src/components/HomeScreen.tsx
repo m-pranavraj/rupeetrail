@@ -183,7 +183,8 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
         confirm: async () => {
           setPendingAction(null)
           try {
-            store.deleteExpense(active.group.id, newest.id)
+            const ok = await store.deleteExpense(active.group.id, newest.id)
+            if (!ok) throw new Error('The expense was not deleted.')
             await store.fetchGroupSummaries()
             setVoiceStatus('Expense deleted.')
           } catch (cause) {
@@ -196,13 +197,18 @@ export function HomeScreen({ onOpenGroup }: { onOpenGroup: (id: string) => void 
     }
 
     if (command?.type === 'record_settlement') {
-      const { fromId, toId, amountPaise, groupId, method } = command
+      const { fromId, toId, amountPaise, method } = command
+      const targetGroupId = command.groupId || store.active?.group.id || summaries[0]?.groupId
+      if (!targetGroupId) {
+        setVoiceError('Open a group first, then I can record a payment.')
+        return
+      }
       setPendingAction({
         action: `Record a ₹${(amountPaise / 100).toFixed(2)} ${method} payment?`,
         confirm: async () => {
           setPendingAction(null)
           try {
-            const ok = await store.recordSettlement(groupId, fromId, toId, amountPaise, method)
+            const ok = await store.recordSettlement(targetGroupId, fromId, toId, amountPaise, method)
             if (!ok) throw new Error('The payment was not recorded.')
             await store.fetchGroupSummaries()
             setVoiceStatus(parsed.reply)
