@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { Expense, MemberId, Settlement, Transfer } from '../types'
 import {
   buildPayback,
@@ -19,6 +19,10 @@ function slugify(value: string): string {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'group'
   )
+}
+
+function shortName(name: string): string {
+  return name.trim().split(/\s+/)[0] || name
 }
 
 function downloadImage(dataUrl: string, filename: string) {
@@ -50,6 +54,7 @@ export function PaybackCard({
   settlements,
   groupName,
   currentMemberId,
+  memberIds,
   nameOf,
   colorOf,
   upiOf,
@@ -60,6 +65,7 @@ export function PaybackCard({
   settlements: Settlement[]
   groupName: string
   currentMemberId?: MemberId
+  memberIds: MemberId[]
   nameOf: (id: MemberId) => string
   colorOf: (id: MemberId) => number
   upiOf: (id: MemberId) => string | undefined
@@ -67,15 +73,25 @@ export function PaybackCard({
   closed: boolean
 }) {
   const [filter, setFilter] = useState<PaybackFilter>('all')
+  const [viewerId, setViewerId] = useState<MemberId>(currentMemberId ?? '')
   const [expanded, setExpanded] = useState<Set<MemberId>>(new Set())
   const [captureMode, setCaptureMode] = useState(false)
   const [sharing, setSharing] = useState(false)
   const [shareNote, setShareNote] = useState('')
   const cardRef = useRef<HTMLElement | null>(null)
 
+  useEffect(() => {
+    setViewerId(currentMemberId ?? '')
+  }, [currentMemberId])
+
+  const activeViewerId = viewerId || currentMemberId || ''
+  const viewerIsMe = !currentMemberId || activeViewerId === currentMemberId
+  const viewerName = activeViewerId ? nameOf(activeViewerId) : ''
+  const viewerShort = viewerIsMe ? 'you' : shortName(viewerName)
+
   const view = useMemo(
-    () => buildPayback(expenses, settlements, { meId: currentMemberId ?? '', filter }),
-    [expenses, settlements, currentMemberId, filter],
+    () => buildPayback(expenses, settlements, { meId: activeViewerId, filter }),
+    [expenses, settlements, activeViewerId, filter],
   )
   const filterLabel = PAYBACK_FILTERS.find((option) => option.id === filter)?.label ?? 'All amounts'
   const hasExpenses = expenses.some((expense) => !expense.deletedAt && expense.amountPaise > 0)
@@ -83,9 +99,14 @@ export function PaybackCard({
     (settlement) =>
       settlement.status !== 'disputed' &&
       settlement.amountPaise > 0 &&
-      (settlement.from === currentMemberId || settlement.to === currentMemberId),
+      (settlement.from === activeViewerId || settlement.to === activeViewerId),
   )
   const filteredOut = hasExpenses && view.people.length === 0 && filter !== 'all'
+  const viewerOptions = useMemo(() => {
+    const ids = [...memberIds]
+    if (currentMemberId && !ids.includes(currentMemberId)) ids.unshift(currentMemberId)
+    return ids
+  }, [memberIds, currentMemberId])
 
   const toggle = (memberId: MemberId) => {
     setExpanded((previous) => {
@@ -104,7 +125,9 @@ export function PaybackCard({
     setShareNote('')
     setCaptureMode(true)
     let dataUrl: string | null = null
-    const filename = `rupeetrail-${slugify(groupName)}-${filter}.png`
+    const viewerSlug = viewerIsMe ? 'you' : slugify(viewerName)
+    const filename = `rupeetrail-${slugify(groupName)}-${viewerSlug}-${filter}.png`
+    const heading = viewerIsMe ? 'who owes whom' : `${viewerName}'s dues`
     try {
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
@@ -125,8 +148,8 @@ export function PaybackCard({
       if (canShareFiles) {
         await navigator.share({
           files: [file],
-          title: `${groupName} · who owes whom`,
-          text: `${groupName} · ${filterLabel}`,
+          title: `${groupName} · ${heading}`,
+          text: `${groupName} · ${heading} · ${filterLabel}`,
         })
         setShareNote('Shared.')
       } else {
@@ -153,7 +176,7 @@ export function PaybackCard({
     const displayName = nameOf(person.memberId)
     const upiId = upiOf(person.memberId)
     const payLink =
-      direction === 'out' && currentMemberId && upiId && isValidUpi(upiId)
+      direction === 'out' && viewerIsMe && currentMemberId && upiId && isValidUpi(upiId)
         ? upiPayLink({
             upiId,
             payeeName: displayName,
@@ -170,7 +193,7 @@ export function PaybackCard({
           </span>
           <strong className="payback-line__amount">{formatPaise(line.amountPaise)}</strong>
         </div>
-        {!captureMode && !closed && currentMemberId ? (
+        {!captureMode && !closed && activeViewerId ? (
           <div className="payback-line__actions">
             {payLink ? (
               <a className="btn btn--tiny btn--soft" href={payLink}>
@@ -183,8 +206,8 @@ export function PaybackCard({
               onClick={() =>
                 onRecord(
                   direction === 'in'
-                    ? { from: person.memberId, to: currentMemberId, amountPaise: line.amountPaise }
-                    : { from: currentMemberId, to: person.memberId, amountPaise: line.amountPaise },
+                    ? { from: person.memberId, to: activeViewerId, amountPaise: line.amountPaise }
+                    : { from: activeViewerId, to: person.memberId, amountPaise: line.amountPaise },
                 )
               }
             >
@@ -216,36 +239,71 @@ export function PaybackCard({
 
       {captureMode ? (
         <p className="payback-capture-line">
-          {filterLabel} · {view.people.length} {view.people.length === 1 ? 'person' : 'people'}
+          {viewerIsMe ? 'Your ledger' : `${viewerName}'s ledger`} · {filterLabel} ·{' '}
+          {view.people.length} {view.people.length === 1 ? 'person' : 'people'}
         </p>
       ) : (
-        <div className="payback-tools">
-          <label className="payback-filter">
-            <span>Share amount</span>
-            <span className="payback-select">
-              <select
-                aria-label="Filter expenses by share amount"
-                value={filter}
-                onChange={(event) => setFilter(event.target.value as PaybackFilter)}
-              >
-                {PAYBACK_FILTERS.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <IconChevron size={13} />
-            </span>
-          </label>
-          <button
-            type="button"
-            className="btn btn--tiny payback-share"
-            onClick={() => void shareImage()}
-            disabled={sharing || view.people.length === 0}
-          >
-            <IconShare size={13} /> {sharing ? 'Preparing…' : 'Share image'}
-          </button>
-        </div>
+        <>
+          {currentMemberId && viewerOptions.length > 1 ? (
+            <div className="payback-viewer">
+              <label className="payback-filter" htmlFor="payback-viewer-select">
+                Whose ledger
+              </label>
+              <span className="payback-select payback-viewer__select">
+                <Avatar name={viewerName} color={colorOf(activeViewerId)} size={22} />
+                <select
+                  id="payback-viewer-select"
+                  aria-label="Choose whose ledger to view"
+                  value={activeViewerId}
+                  onChange={(event) => setViewerId(event.target.value as MemberId)}
+                >
+                  {viewerOptions.map((memberId) => (
+                    <option key={memberId} value={memberId}>
+                      {memberId === currentMemberId
+                        ? `You — ${nameOf(memberId)}`
+                        : nameOf(memberId)}
+                    </option>
+                  ))}
+                </select>
+                <IconChevron size={13} />
+              </span>
+              {!viewerIsMe ? (
+                <span className="payback-viewer__note">
+                  Recording here saves a payment between {viewerShort} and the person — not
+                  between you and them.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="payback-tools">
+            <label className="payback-filter">
+              <span>Share amount</span>
+              <span className="payback-select">
+                <select
+                  aria-label="Filter expenses by share amount"
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value as PaybackFilter)}
+                >
+                  {PAYBACK_FILTERS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <IconChevron size={13} />
+              </span>
+            </label>
+            <button
+              type="button"
+              className="btn btn--tiny payback-share"
+              onClick={() => void shareImage()}
+              disabled={sharing || view.people.length === 0}
+            >
+              <IconShare size={13} /> {sharing ? 'Preparing…' : 'Share image'}
+            </button>
+          </div>
+        </>
       )}
 
       {shareNote && !captureMode ? <p className="payback-share-note">{shareNote}</p> : null}
@@ -273,18 +331,20 @@ export function PaybackCard({
         <>
           <div className="payback-summary">
             <span className="payback-summary__stat is-get">
-              You paid for others <strong>{formatPaise(view.theyOwePaise)}</strong>
+              {viewerIsMe ? 'Owed to you' : `Owed to ${viewerShort}`}{' '}
+              <strong>{formatPaise(view.theyOwePaise)}</strong>
             </span>
             <span className="payback-summary__stat is-pay">
-              Others paid for you <strong>{formatPaise(view.youOwePaise)}</strong>
+              {viewerIsMe ? 'You owe' : `${viewerShort} owes`}{' '}
+              <strong>{formatPaise(view.youOwePaise)}</strong>
             </span>
             <span className="payback-summary__stat">
               {view.expenseCount} {view.expenseCount === 1 ? 'expense' : 'expenses'}
             </span>
             {view.receivedPaise > 0 || view.sentPaise > 0 ? (
               <span className="payback-summary__stat is-muted">
-                {formatPaise(view.receivedPaise)} received · {formatPaise(view.sentPaise)} sent in
-                payments (not deducted)
+                {formatPaise(view.receivedPaise)} in · {formatPaise(view.sentPaise)} out in payments
+                (not deducted)
               </span>
             ) : null}
           </div>
@@ -313,13 +373,13 @@ export function PaybackCard({
                       {person.theyOwePaise > 0 ? (
                         <span className="payback-person__amount is-get">
                           <strong>{formatPaise(person.theyOwePaise)}</strong>
-                          <span>owes you</span>
+                          <span>{viewerIsMe ? 'owes you' : `owes ${viewerShort}`}</span>
                         </span>
                       ) : null}
                       {person.youOwePaise > 0 ? (
                         <span className="payback-person__amount is-pay">
                           <strong>{formatPaise(person.youOwePaise)}</strong>
-                          <span>you owe</span>
+                          <span>{viewerIsMe ? 'you owe' : `${viewerShort} owes`}</span>
                         </span>
                       ) : null}
                       {person.theyOwePaise === 0 && person.youOwePaise === 0 ? (
@@ -337,7 +397,7 @@ export function PaybackCard({
                       {person.theyOwe.length > 0 ? (
                         <div className="payback-group">
                           <p className="payback-group__label">
-                            They owe you
+                            {viewerIsMe ? 'They owe you' : `They owe ${viewerShort}`}
                             <span>
                               {person.theyOwe.length} · {formatPaise(person.theyOwePaise)}
                             </span>
@@ -351,7 +411,7 @@ export function PaybackCard({
                       {person.youOwe.length > 0 ? (
                         <div className="payback-group">
                           <p className="payback-group__label">
-                            You owe them
+                            {viewerIsMe ? 'You owe them' : `${viewerShort} owes them`}
                             <span>
                               {person.youOwe.length} · {formatPaise(person.youOwePaise)}
                             </span>
@@ -365,7 +425,9 @@ export function PaybackCard({
                       {person.payments.length > 0 ? (
                         <div className="payback-group">
                           <p className="payback-group__label">
-                            Payments between you
+                            {viewerIsMe
+                              ? 'Payments between you'
+                              : `Payments between ${viewerShort} and them`}
                             <span>not deducted</span>
                           </p>
                           <ul className="payback-lines">
@@ -377,8 +439,8 @@ export function PaybackCard({
                                 <div className="payback-line">
                                   <span className="payback-line__text">
                                     {payment.direction === 'in'
-                                      ? `${displayName} paid you`
-                                      : `You paid ${displayName}`}{' '}
+                                      ? `${displayName} paid ${viewerIsMe ? 'you' : viewerShort}`
+                                      : `${viewerIsMe ? 'You' : viewerShort} paid ${displayName}`}{' '}
                                     <small>{formatDay(payment.date)}</small>
                                   </span>
                                   <strong className="payback-line__amount">
@@ -401,7 +463,9 @@ export function PaybackCard({
 
       {captureMode ? (
         <div className="payback-capture-foot">
-          <span>RupeeSplit · {groupName}</span>
+          <span>
+            RupeeSplit · {groupName} · {viewerIsMe ? 'you' : viewerShort}
+          </span>
           <span>{filterLabel}</span>
         </div>
       ) : (

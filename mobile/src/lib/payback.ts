@@ -77,6 +77,53 @@ export interface PaybackView {
   expenseCount: number
 }
 
+/** One gross amount one person owes another, added up across expenses. */
+export interface DuesPair {
+  /** The person who consumed a share without fronting the money. */
+  fromId: MemberId
+  /** The person who actually paid for that share. */
+  toId: MemberId
+  amountPaise: number
+  expenseCount: number
+}
+
+export interface DuesEdge {
+  /** The other person in the pair. */
+  memberId: MemberId
+  amountPaise: number
+  expenseCount: number
+}
+
+export interface DuesMember {
+  memberId: MemberId
+  /** People this member owes, largest first. */
+  owes: DuesEdge[]
+  /** People who owe this member, largest first. */
+  owedBy: DuesEdge[]
+  owesPaise: number
+  owedByPaise: number
+  /** Distinct expenses behind any edge involving this person. */
+  expenseCount: number
+}
+
+export interface GroupDues {
+  members: DuesMember[]
+  pairs: DuesPair[]
+  totalPaise: number
+  pairCount: number
+  expenseCount: number
+}
+
+/** One person's share of one expense, attributed to one person who paid. */
+interface ExpenseDebt {
+  expenseId: ExpenseId
+  description: string
+  date: number
+  fromId: MemberId
+  toId: MemberId
+  amountPaise: number
+}
+
 /** Split one person's share across the people who actually fronted the money. */
 function attributeShare(
   sharePaise: number,
@@ -105,6 +152,41 @@ function attributeShare(
     memberId: payer.memberId,
     amountPaise: amounts[index],
   }))
+}
+
+/**
+ * Walk every valid expense and report each portion of a share that one person
+ * fronted for another. This is the single source of gross pairwise debt; both
+ * the per-person ledger and the group dues table read from it.
+ */
+function forEachExpenseDebt(expenses: Expense[], onDebt: (debt: ExpenseDebt) => void): void {
+  for (const expense of expenses) {
+    if (expense.deletedAt || expense.amountPaise <= 0) continue
+    const payers = expense.payers.filter((payer) => payer.amountPaise > 0)
+    if (payers.length === 0) continue
+
+    let allocations
+    try {
+      allocations = allocateSplit(expense.amountPaise, expense.split)
+    } catch {
+      continue
+    }
+
+    for (const allocation of allocations) {
+      if (allocation.amountPaise <= 0) continue
+      for (const portion of attributeShare(allocation.amountPaise, payers)) {
+        if (portion.amountPaise <= 0 || portion.memberId === allocation.memberId) continue
+        onDebt({
+          expenseId: expense.id,
+          description: expense.description,
+          date: expense.date,
+          fromId: allocation.memberId,
+          toId: portion.memberId,
+          amountPaise: portion.amountPaise,
+        })
+      }
+    }
+  }
 }
 
 /**
@@ -147,42 +229,21 @@ export function buildPayback(
     return created
   }
 
-  for (const expense of expenses) {
-    if (expense.deletedAt || expense.amountPaise <= 0) continue
-    const payers = expense.payers.filter((payer) => payer.amountPaise > 0)
-    if (payers.length === 0) continue
+  forEachExpenseDebt(expenses, (debt) => {
+    const otherId =
+      debt.toId === meId ? debt.fromId : debt.fromId === meId ? debt.toId : null
+    if (!otherId || !amountInFilter(debt.amountPaise, filter)) return
 
-    let allocations
-    try {
-      allocations = allocateSplit(expense.amountPaise, expense.split)
-    } catch {
-      continue
+    const person = personFor(otherId)
+    const line: PaybackLine = {
+      expenseId: debt.expenseId,
+      description: debt.description,
+      date: debt.date,
+      amountPaise: debt.amountPaise,
     }
-
-    for (const allocation of allocations) {
-      if (allocation.amountPaise <= 0) continue
-      for (const portion of attributeShare(allocation.amountPaise, payers)) {
-        if (portion.amountPaise <= 0 || portion.memberId === allocation.memberId) continue
-        const otherId =
-          portion.memberId === meId
-            ? allocation.memberId
-            : allocation.memberId === meId
-              ? portion.memberId
-              : null
-        if (!otherId || !amountInFilter(portion.amountPaise, filter)) continue
-
-        const person = personFor(otherId)
-        const line: PaybackLine = {
-          expenseId: expense.id,
-          description: expense.description,
-          date: expense.date,
-          amountPaise: portion.amountPaise,
-        }
-        if (portion.memberId === meId) person.theyOwe.push(line)
-        else person.youOwe.push(line)
-      }
-    }
-  }
+    if (debt.toId === meId) person.theyOwe.push(line)
+    else person.youOwe.push(line)
+  })
 
   for (const payment of settlements) {
     if (payment.status === 'disputed' || payment.amountPaise <= 0) continue
@@ -234,5 +295,127 @@ export function buildPayback(
     receivedPaise: visible.reduce((sum, person) => sum + person.receivedPaise, 0),
     sentPaise: visible.reduce((sum, person) => sum + person.sentPaise, 0),
     expenseCount: expenseIds.size,
+  }
+}
+
+/**
+ * Every gross amount owed between every pair of people, from expenses only.
+ * Payments are deliberately not an input: the dues table never shrinks when
+ * someone pays part of a share. Pass memberIds to include people with no dues.
+ */
+export function buildGroupDues(
+  expenses: Expense[],
+  options: { memberIds?: MemberId[] } = {},
+): GroupDues {
+  interface PairAccumulator {
+    fromId: MemberId
+    toId: MemberId
+    amountPaise: number
+    expenseIds: Set<ExpenseId>
+  }
+
+  const byPair = new Map<string, PairAccumulator>()
+  const allExpenseIds = new Set<ExpenseId>()
+  const pairKey = (fromId: MemberId, toId: MemberId) => `${fromId}\u0000${toId}`
+
+  forEachExpenseDebt(expenses, (debt) => {
+    const key = pairKey(debt.fromId, debt.toId)
+    const existing = byPair.get(key)
+    if (existing) {
+      existing.amountPaise += debt.amountPaise
+      existing.expenseIds.add(debt.expenseId)
+    } else {
+      byPair.set(key, {
+        fromId: debt.fromId,
+        toId: debt.toId,
+        amountPaise: debt.amountPaise,
+        expenseIds: new Set([debt.expenseId]),
+      })
+    }
+    allExpenseIds.add(debt.expenseId)
+  })
+
+  const pairs: DuesPair[] = [...byPair.values()]
+    .map((pair) => ({
+      fromId: pair.fromId,
+      toId: pair.toId,
+      amountPaise: pair.amountPaise,
+      expenseCount: pair.expenseIds.size,
+    }))
+    .sort(
+      (a, b) =>
+        b.amountPaise - a.amountPaise ||
+        a.fromId.localeCompare(b.fromId) ||
+        a.toId.localeCompare(b.toId),
+    )
+
+  const memberIds = new Set<MemberId>(options.memberIds ?? [])
+  for (const pair of pairs) {
+    memberIds.add(pair.fromId)
+    memberIds.add(pair.toId)
+  }
+
+  const members = new Map<MemberId, DuesMember & { expenseIds: Set<ExpenseId> }>()
+  for (const memberId of memberIds) {
+    members.set(memberId, {
+      memberId,
+      owes: [],
+      owedBy: [],
+      owesPaise: 0,
+      owedByPaise: 0,
+      expenseCount: 0,
+      expenseIds: new Set(),
+    })
+  }
+
+  for (const pair of pairs) {
+    const from = members.get(pair.fromId)!
+    const to = members.get(pair.toId)!
+    from.owes.push({
+      memberId: pair.toId,
+      amountPaise: pair.amountPaise,
+      expenseCount: pair.expenseCount,
+    })
+    to.owedBy.push({
+      memberId: pair.fromId,
+      amountPaise: pair.amountPaise,
+      expenseCount: pair.expenseCount,
+    })
+    from.owesPaise += pair.amountPaise
+    to.owedByPaise += pair.amountPaise
+    for (const expenseId of byPair.get(pairKey(pair.fromId, pair.toId))!.expenseIds) {
+      from.expenseIds.add(expenseId)
+      to.expenseIds.add(expenseId)
+    }
+  }
+
+  const sortedMembers: DuesMember[] = [...members.values()].map((member) => {
+    member.owes.sort(
+      (a, b) => b.amountPaise - a.amountPaise || a.memberId.localeCompare(b.memberId),
+    )
+    member.owedBy.sort(
+      (a, b) => b.amountPaise - a.amountPaise || a.memberId.localeCompare(b.memberId),
+    )
+    return {
+      memberId: member.memberId,
+      owes: member.owes,
+      owedBy: member.owedBy,
+      owesPaise: member.owesPaise,
+      owedByPaise: member.owedByPaise,
+      expenseCount: member.expenseIds.size,
+    }
+  })
+  sortedMembers.sort(
+    (a, b) =>
+      b.owesPaise + b.owedByPaise - (a.owesPaise + a.owedByPaise) ||
+      a.memberId.localeCompare(b.memberId),
+  )
+
+  return {
+    members: sortedMembers,
+    pairs,
+    totalPaise: pairs.reduce((sum, pair) => sum + pair.amountPaise, 0),
+    pairCount: pairs.length,
+    expenseCount: allExpenseIds.size,
   }
 }

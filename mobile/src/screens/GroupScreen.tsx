@@ -42,6 +42,7 @@ import {
 } from '../components/ui'
 import { TripMap, type MapPoint } from '../components/TripMap'
 import { PaybackCard } from '../components/PaybackCard'
+import { GroupDuesCard } from '../components/GroupDuesCard'
 import { ExpenseForm } from '../components/ExpenseForm'
 import { ExpenseDetail } from '../components/ExpenseDetail'
 import { GroupSettingsSheet } from '../components/GroupSettingsSheet'
@@ -169,6 +170,7 @@ export function GroupScreen() {
     () => (group?.members ?? []).filter((member) => !member.leftAt),
     [group],
   )
+  const activeMemberIds = useMemo(() => activeMembers.map((member) => member.id), [activeMembers])
   const balances = useMemo(
     () => (group ? computeBalances({ group, expenses, settlements }) : []),
     [expenses, group, settlements],
@@ -787,6 +789,7 @@ export function GroupScreen() {
               settlements={settlements}
               groupName={group.name}
               meId={me.id}
+              memberIds={activeMemberIds}
               nameOf={(id) => nameOf(group, id)}
               colorOf={(id) => group.members.find((entry) => entry.id === id)?.color ?? 0}
               upiOf={(id) => activeMembers.find((entry) => entry.id === id)?.upiId}
@@ -802,6 +805,14 @@ export function GroupScreen() {
               payingKey={payingKey}
               closed={group.status === 'closed'}
               onNotify={notify}
+            />
+
+            <GroupDuesCard
+              expenses={expenses}
+              memberIds={activeMemberIds}
+              meId={me.id}
+              nameOf={(id) => nameOf(group, id)}
+              colorOf={(id) => group.members.find((entry) => entry.id === id)?.color ?? 0}
             />
 
             <Button

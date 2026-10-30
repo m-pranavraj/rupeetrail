@@ -6,7 +6,7 @@
  * payment must never make an expense look cheaper than it was. The visible card
  * can also be captured as an image so it can leave the app in a chat.
  */
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, StyleSheet, Text, View, type ViewInstance } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import * as Sharing from 'expo-sharing'
@@ -29,6 +29,7 @@ export interface PaybackCardProps {
   settlements: Settlement[]
   groupName: string
   meId: MemberId
+  memberIds: MemberId[]
   nameOf: (id: MemberId) => string
   colorOf: (id: MemberId) => number
   upiOf: (id: MemberId) => string | undefined
@@ -43,6 +44,10 @@ type Direction = 'in' | 'out'
 
 const formatDay = (timestamp: number): string =>
   new Date(timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+
+function shortName(name: string): string {
+  return name.trim().split(/\s+/)[0] || name
+}
 
 /** Counts that explain a person row without making the reader do arithmetic. */
 function countLine(person: PaybackPerson): string {
@@ -75,6 +80,7 @@ export function PaybackCard({
   settlements,
   groupName,
   meId,
+  memberIds,
   nameOf,
   colorOf,
   upiOf,
@@ -86,6 +92,8 @@ export function PaybackCard({
 }: PaybackCardProps) {
   const [filter, setFilter] = useState<PaybackFilter>('all')
   const [filterOpen, setFilterOpen] = useState(false)
+  const [viewerId, setViewerId] = useState<MemberId>(meId)
+  const [viewerOpen, setViewerOpen] = useState(false)
   const [captureMode, setCaptureMode] = useState(false)
   const [sharing, setSharing] = useState(false)
   const [shareNote, setShareNote] = useState('')
@@ -93,9 +101,23 @@ export function PaybackCard({
   const cardRef = useRef<ViewInstance>(null)
   const sharingRef = useRef(false)
 
+  useEffect(() => {
+    setViewerId(meId)
+  }, [meId])
+
+  const activeViewerId = viewerId || meId
+  const viewerIsMe = activeViewerId === meId
+  const viewerName = nameOf(activeViewerId)
+  const viewerShort = viewerIsMe ? 'you' : shortName(viewerName)
+  const viewerOptions = useMemo(() => {
+    const ids = [...memberIds]
+    if (!ids.includes(meId)) ids.unshift(meId)
+    return ids
+  }, [memberIds, meId])
+
   const view = useMemo(
-    () => buildPayback(expenses, settlements, { meId, filter }),
-    [expenses, settlements, meId, filter],
+    () => buildPayback(expenses, settlements, { meId: activeViewerId, filter }),
+    [expenses, settlements, activeViewerId, filter],
   )
 
   const activeFilter = PAYBACK_FILTERS.find((option) => option.id === filter) ?? PAYBACK_FILTERS[0]
@@ -140,7 +162,7 @@ export function PaybackCard({
       }
       await Sharing.shareAsync(uri, {
         mimeType: 'image/png',
-        dialogTitle: 'Share who owes whom',
+        dialogTitle: viewerIsMe ? 'Share who owes whom' : `Share ${viewerName}'s dues`,
       })
       setShareNote('Shared.')
     } catch (error) {
@@ -161,11 +183,12 @@ export function PaybackCard({
     index: number,
   ) => {
     const displayName = nameOf(person.memberId)
-    const from = direction === 'in' ? person.memberId : meId
-    const to = direction === 'in' ? meId : person.memberId
+    const from = direction === 'in' ? person.memberId : activeViewerId
+    const to = direction === 'in' ? activeViewerId : person.memberId
     const key = `${from}-${to}-${line.amountPaise}`
     const upiId = upiOf(person.memberId)
-    const canPayUpi = direction === 'out' && Boolean(upiId) && isValidUpi(upiId ?? '')
+    const canPayUpi =
+      direction === 'out' && viewerIsMe && Boolean(upiId) && isValidUpi(upiId ?? '')
 
     return (
       <View key={`${line.expenseId}-${index}`} style={styles.line}>
@@ -258,33 +281,102 @@ export function PaybackCard({
           <View style={styles.captureFilter}>
             <Ionicons name="funnel-outline" size={11} color={colors.accent} />
             <Text style={styles.captureFilterText}>
-              {filterLabel} · {peopleCount} {peopleCount === 1 ? 'person' : 'people'}
+              {viewerIsMe ? 'Your ledger' : `${viewerName}'s ledger`} · {filterLabel} · {peopleCount}{' '}
+              {peopleCount === 1 ? 'person' : 'people'}
             </Text>
           </View>
         ) : (
-          <View style={styles.controls}>
-            <PressableScale
-              onPress={() => setFilterOpen((previous) => !previous)}
-              scaleTo={0.96}
-              accessibilityLabel="Filter expenses by share amount"
-            >
-              <View style={[styles.chip, filterOpen && styles.chipOpen]}>
-                <Ionicons
-                  name="funnel-outline"
-                  size={12}
-                  color={filter === 'all' ? colors.mutedDim : colors.accent}
-                />
-                <Text style={[styles.chipText, filter !== 'all' && styles.chipTextActive]}>
-                  {filterLabel}
-                </Text>
-                <Ionicons
-                  name={filterOpen ? 'chevron-up' : 'chevron-down'}
-                  size={12}
-                  color={colors.mutedDim}
-                />
+          <>
+            {viewerOptions.length > 1 ? (
+              <View style={styles.viewerBar}>
+                <Text style={styles.viewerLabel}>Whose ledger</Text>
+                <PressableScale
+                  onPress={() => {
+                    setViewerOpen((previous) => !previous)
+                    setFilterOpen(false)
+                  }}
+                  scaleTo={0.96}
+                  accessibilityLabel="Choose whose ledger to view"
+                >
+                  <View style={[styles.viewerChip, viewerOpen && styles.chipOpen]}>
+                    <Avatar name={viewerName} color={colorOf(activeViewerId)} size={20} />
+                    <Text style={styles.viewerChipText} numberOfLines={1}>
+                      {viewerIsMe ? `You — ${viewerName}` : viewerName}
+                    </Text>
+                    <Ionicons
+                      name={viewerOpen ? 'chevron-up' : 'chevron-down'}
+                      size={12}
+                      color={colors.mutedDim}
+                    />
+                  </View>
+                </PressableScale>
               </View>
-            </PressableScale>
-          </View>
+            ) : null}
+            {!viewerIsMe ? (
+              <Text style={styles.viewerNote}>
+                Recording here saves a payment between {viewerShort} and the person — not between
+                you and them.
+              </Text>
+            ) : null}
+            {viewerOpen ? (
+              <View style={styles.dropdown}>
+                {viewerOptions.map((memberId) => {
+                  const active = memberId === activeViewerId
+                  const memberName = nameOf(memberId)
+                  return (
+                    <PressableScale
+                      key={memberId}
+                      onPress={() => {
+                        setViewerId(memberId)
+                        setViewerOpen(false)
+                      }}
+                      scaleTo={0.98}
+                      accessibilityLabel={`View ${memberName}'s ledger`}
+                    >
+                      <View style={[styles.dropdownRow, active && styles.dropdownRowActive]}>
+                        <View style={styles.viewerOption}>
+                          <Avatar name={memberName} color={colorOf(memberId)} size={22} />
+                          <Text
+                            style={[styles.dropdownText, active && styles.dropdownTextActive]}
+                            numberOfLines={1}
+                          >
+                            {memberId === meId ? `You — ${memberName}` : memberName}
+                          </Text>
+                        </View>
+                        {active ? <Ionicons name="checkmark" size={15} color={colors.accent} /> : null}
+                      </View>
+                    </PressableScale>
+                  )
+                })}
+              </View>
+            ) : null}
+            <View style={styles.controls}>
+              <PressableScale
+                onPress={() => {
+                  setFilterOpen((previous) => !previous)
+                  setViewerOpen(false)
+                }}
+                scaleTo={0.96}
+                accessibilityLabel="Filter expenses by share amount"
+              >
+                <View style={[styles.chip, filterOpen && styles.chipOpen]}>
+                  <Ionicons
+                    name="funnel-outline"
+                    size={12}
+                    color={filter === 'all' ? colors.mutedDim : colors.accent}
+                  />
+                  <Text style={[styles.chipText, filter !== 'all' && styles.chipTextActive]}>
+                    {filterLabel}
+                  </Text>
+                  <Ionicons
+                    name={filterOpen ? 'chevron-up' : 'chevron-down'}
+                    size={12}
+                    color={colors.mutedDim}
+                  />
+                </View>
+              </PressableScale>
+            </View>
+          </>
         )}
 
         {filterOpen && !captureMode ? (
@@ -347,13 +439,17 @@ export function PaybackCard({
             <View style={styles.summary}>
               <View style={styles.summaryRow}>
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryLabel}>You paid for others</Text>
+                  <Text style={styles.summaryLabel}>
+                    {viewerIsMe ? 'You paid for others' : `${viewerShort} paid for others`}
+                  </Text>
                   <Text style={[styles.summaryValue, { color: colors.accent }]}>
                     {formatPaise(view.theyOwePaise)}
                   </Text>
                 </View>
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryLabel}>Others paid for you</Text>
+                  <Text style={styles.summaryLabel}>
+                    {viewerIsMe ? 'Others paid for you' : `Others paid for ${viewerShort}`}
+                  </Text>
                   <Text style={[styles.summaryValue, { color: colors.coral }]}>
                     {formatPaise(view.youOwePaise)}
                   </Text>
@@ -400,7 +496,9 @@ export function PaybackCard({
                               <Text style={[styles.amountValue, { color: colors.accent }]}>
                                 {formatPaise(person.theyOwePaise)}
                               </Text>
-                              <Text style={styles.amountLabel}>owes you</Text>
+                              <Text style={styles.amountLabel}>
+                                {viewerIsMe ? 'owes you' : `owes ${viewerShort}`}
+                              </Text>
                             </View>
                           ) : null}
                           {person.youOwePaise > 0 ? (
@@ -408,7 +506,9 @@ export function PaybackCard({
                               <Text style={[styles.amountValue, { color: colors.coral }]}>
                                 {formatPaise(person.youOwePaise)}
                               </Text>
-                              <Text style={styles.amountLabel}>you owe</Text>
+                              <Text style={styles.amountLabel}>
+                                {viewerIsMe ? 'you owe' : `${viewerShort} owes`}
+                              </Text>
                             </View>
                           ) : null}
                           {even ? (
@@ -433,7 +533,9 @@ export function PaybackCard({
                         {person.theyOwe.length > 0 ? (
                           <View style={styles.section}>
                             <View style={styles.sectionHead}>
-                              <Text style={styles.sectionLabel}>They owe you</Text>
+                              <Text style={styles.sectionLabel}>
+                                {viewerIsMe ? 'They owe you' : `They owe ${viewerShort}`}
+                              </Text>
                               <Text style={styles.sectionTotal}>
                                 {person.theyOwe.length} · {formatPaise(person.theyOwePaise)}
                               </Text>
@@ -447,7 +549,9 @@ export function PaybackCard({
                         {person.youOwe.length > 0 ? (
                           <View style={styles.section}>
                             <View style={styles.sectionHead}>
-                              <Text style={styles.sectionLabel}>You owe them</Text>
+                              <Text style={styles.sectionLabel}>
+                                {viewerIsMe ? 'You owe them' : `${viewerShort} owes them`}
+                              </Text>
                               <Text style={styles.sectionTotal}>
                                 {person.youOwe.length} · {formatPaise(person.youOwePaise)}
                               </Text>
@@ -461,15 +565,19 @@ export function PaybackCard({
                         {person.payments.length > 0 ? (
                           <View style={styles.section}>
                             <View style={styles.sectionHead}>
-                              <Text style={styles.sectionLabel}>Payments between you</Text>
+                              <Text style={styles.sectionLabel}>
+                                {viewerIsMe
+                                  ? 'Payments between you'
+                                  : `Payments between ${viewerShort} and them`}
+                              </Text>
                               <Text style={styles.sectionTotal}>not deducted</Text>
                             </View>
                             {person.payments.map((payment) => (
                               <View key={payment.settlementId} style={styles.paymentLine}>
                                 <Text style={styles.paymentText} numberOfLines={2}>
                                   {payment.direction === 'in'
-                                    ? `${name} paid you`
-                                    : `You paid ${name}`}{' '}
+                                    ? `${name} paid ${viewerIsMe ? 'you' : viewerShort}`
+                                    : `${viewerIsMe ? 'You' : viewerShort} paid ${name}`}{' '}
                                   <Text style={styles.paymentAmount}>
                                     {formatPaise(payment.amountPaise)}
                                   </Text>
@@ -494,7 +602,7 @@ export function PaybackCard({
         <Divider />
         {captureMode ? (
           <Text style={styles.watermark} numberOfLines={1}>
-            RupeeSplit · {groupName} · {filterLabel}
+            RupeeSplit · {groupName} · {viewerIsMe ? 'you' : viewerShort} · {filterLabel}
           </Text>
         ) : (
           <Text style={styles.fineprint}>
@@ -557,6 +665,41 @@ const styles = StyleSheet.create({
   chipOpen: { borderColor: colors.border, backgroundColor: colors.surfaceAlt },
   chipText: { color: colors.muted, fontSize: 11.5, fontWeight: '700' },
   chipTextActive: { color: colors.accent },
+
+  viewerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing(2),
+    marginTop: spacing(3),
+  },
+  viewerLabel: {
+    color: colors.mutedDim,
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  viewerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing(1.6),
+    paddingLeft: spacing(1.2),
+    paddingRight: spacing(2.5),
+    paddingVertical: spacing(1),
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: tints.accent.border,
+    backgroundColor: tints.accent.fill,
+  },
+  viewerChipText: { color: colors.text, fontSize: 12, fontWeight: '700', maxWidth: 190 },
+  viewerNote: {
+    marginTop: spacing(1.8),
+    color: colors.muted,
+    fontSize: 10.5,
+    lineHeight: 15,
+  },
+  viewerOption: { flexDirection: 'row', alignItems: 'center', gap: spacing(2), flex: 1, minWidth: 0 },
 
   dropdown: {
     marginTop: spacing(2),

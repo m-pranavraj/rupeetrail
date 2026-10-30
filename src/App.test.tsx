@@ -427,6 +427,75 @@ describe('shared groups', () => {
     expect(payLink.getAttribute('href')).toContain('upi://pay?')
     expect(payLink.getAttribute('href')).toContain('pa=priya%40ybl')
   })
+
+  it('opens any person’s ledger and shows everyone’s dues as a table', async () => {
+    const RAVI = 'm_ravi'
+    const snapshot = baseSnapshot()
+    snapshot.group.members.push({
+      id: RAVI,
+      name: 'Ravi',
+      color: 2,
+      joinedAt: Date.now() - 1000,
+    })
+    snapshot.expenses.push({
+      ...snapshot.expenses[0],
+      id: 'e_cab',
+      description: 'Cab',
+      amountPaise: 30000,
+      date: Date.now() - 1800000,
+      payers: [{ memberId: PRIYA, amountPaise: 30000 }],
+      split: { mode: 'equal', participants: [PRIYA, RAVI] },
+    })
+    snapshot.settlements = [
+      {
+        id: 's_ravi_priya',
+        groupId: GROUP_ID,
+        from: RAVI,
+        to: PRIYA,
+        amountPaise: 15000,
+        method: 'upi',
+        status: 'confirmed',
+        createdAt: Date.now() - 600000,
+        updatedAt: Date.now() - 600000,
+      },
+    ]
+    server = snapshot
+    seedDevice(snapshot)
+    const user = userEvent.setup()
+    renderApp()
+
+    await user.click(await screen.findByText('Goa plan'))
+    await user.click(await screen.findByRole('tab', { name: 'Settle' }))
+
+    expect(await screen.findByText(/Everyone’s dues/)).toBeTruthy()
+    const table = screen.getByRole('table', {
+      name: /Gross amount each person owes each other person/i,
+    })
+    // Priya owes Arjun ₹500 and Ravi owes Priya ₹150; Ravi's payment never shrinks it.
+    const body = within(table.querySelector('tbody') as HTMLElement)
+    expect(body.getAllByText('₹500').length).toBeGreaterThan(0)
+    expect(body.getAllByText('₹150').length).toBeGreaterThan(0)
+    expect(within(table).getAllByText('₹650').length).toBeGreaterThan(0)
+
+    const viewer = (await screen.findByLabelText(
+      'Choose whose ledger to view',
+    )) as HTMLSelectElement
+    expect(viewer.value).toBe(ME)
+
+    await user.selectOptions(viewer, RAVI)
+    expect((await screen.findAllByText('Ravi owes')).length).toBeGreaterThan(0)
+    expect(screen.getByText(/1 expense · 1 payment/)).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: /Priya, show expenses/i }))
+    expect(await screen.findByText('Ravi owes them')).toBeTruthy()
+    expect(screen.getByText(/Ravi paid Priya/)).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /Pay Priya by UPI/i })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Record payment' }))
+    const dialog = await screen.findByRole('dialog')
+    expect((within(dialog).getByLabelText('From (payer)') as HTMLSelectElement).value).toBe(RAVI)
+    expect((within(dialog).getByLabelText('To (receiver)') as HTMLSelectElement).value).toBe(PRIYA)
+  })
 })
 
 describe('invite links', () => {

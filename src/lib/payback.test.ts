@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { Expense, Settlement } from '../types'
-import { amountInFilter, buildPayback, PAYBACK_FILTERS } from './payback'
+import { amountInFilter, buildGroupDues, buildPayback, PAYBACK_FILTERS } from './payback'
 
 const ME = 'arjun'
 const PRIYA = 'priya'
 const RAVI = 'ravi'
+const NEHA = 'neha'
 const BASE_TIME = 1_700_000_000_000
 
 let seq = 0
@@ -254,6 +255,134 @@ describe('buildPayback', () => {
       youOwePaise: 0,
       receivedPaise: 0,
       sentPaise: 0,
+      expenseCount: 0,
+    })
+  })
+})
+
+describe('buildGroupDues', () => {
+  it('lists every pairwise due in full instead of netting people off each other', () => {
+    const dinner = expense({ id: 'e_dinner' })
+    const cab = expense({
+      id: 'e_cab',
+      amountPaise: 30_000,
+      payers: [{ memberId: RAVI, amountPaise: 30_000 }],
+      split: { mode: 'equal', participants: [RAVI, NEHA] },
+    })
+
+    const view = buildGroupDues([dinner, cab], { memberIds: [ME, PRIYA, RAVI, NEHA] })
+
+    expect(view.pairs).toEqual([
+      { fromId: PRIYA, toId: ME, amountPaise: 50_000, expenseCount: 1 },
+      { fromId: NEHA, toId: RAVI, amountPaise: 15_000, expenseCount: 1 },
+    ])
+    expect(view.totalPaise).toBe(65_000)
+    expect(view.pairCount).toBe(2)
+    expect(view.expenseCount).toBe(2)
+
+    const priya = view.members.find((member) => member.memberId === PRIYA)!
+    expect(priya.owesPaise).toBe(50_000)
+    expect(priya.owedByPaise).toBe(0)
+    expect(priya.owes).toEqual([{ memberId: ME, amountPaise: 50_000, expenseCount: 1 }])
+  })
+
+  it('attributes each share across multiple payers', () => {
+    const shared = expense({
+      id: 'e_shared',
+      amountPaise: 1_00_000,
+      payers: [
+        { memberId: ME, amountPaise: 60_000 },
+        { memberId: PRIYA, amountPaise: 40_000 },
+      ],
+      split: { mode: 'equal', participants: [ME, PRIYA] },
+    })
+
+    const view = buildGroupDues([shared])
+
+    expect(view.pairs).toEqual([
+      { fromId: PRIYA, toId: ME, amountPaise: 30_000, expenseCount: 1 },
+      { fromId: ME, toId: PRIYA, amountPaise: 20_000, expenseCount: 1 },
+    ])
+    expect(view.totalPaise).toBe(50_000)
+  })
+
+  it('adds up every expense for the same pair and counts them', () => {
+    const first = expense({ id: 'e_first', amountPaise: 1_00_000 })
+    const second = expense({ id: 'e_second', amountPaise: 60_000 })
+
+    const view = buildGroupDues([first, second])
+
+    expect(view.pairs).toEqual([
+      { fromId: PRIYA, toId: ME, amountPaise: 80_000, expenseCount: 2 },
+    ])
+    expect(view.expenseCount).toBe(2)
+  })
+
+  it('includes every member, even people with nothing pending', () => {
+    const view = buildGroupDues([expense()], { memberIds: [NEHA, RAVI, PRIYA, ME] })
+
+    expect(view.members.map((member) => member.memberId)).toEqual([ME, PRIYA, NEHA, RAVI])
+    const neha = view.members.find((member) => member.memberId === NEHA)!
+    expect(neha).toEqual({
+      memberId: NEHA,
+      owes: [],
+      owedBy: [],
+      owesPaise: 0,
+      owedByPaise: 0,
+      expenseCount: 0,
+    })
+  })
+
+  it('sorts each member’s outgoing and incoming edges by amount', () => {
+    const toMe = expense({ amountPaise: 1_00_000 }) // Priya owes Arjun 500
+    const toRavi = expense({
+      amountPaise: 8_00_000,
+      payers: [{ memberId: RAVI, amountPaise: 8_00_000 }],
+      split: { mode: 'equal', participants: [RAVI, PRIYA] },
+    }) // Priya owes Ravi 4,000
+
+    const view = buildGroupDues([toMe, toRavi], { memberIds: [ME, PRIYA, RAVI] })
+    const priya = view.members.find((member) => member.memberId === PRIYA)!
+
+    expect(priya.owes.map((edge) => [edge.memberId, edge.amountPaise])).toEqual([
+      [RAVI, 4_00_000],
+      [ME, 50_000],
+    ])
+    expect(priya.owesPaise).toBe(4_50_000)
+  })
+
+  it('ignores deleted expenses, broken splits and self-only expenses', () => {
+    const deleted = expense({ id: 'e_deleted', deletedAt: BASE_TIME })
+    const broken = expense({
+      id: 'e_broken',
+      split: { mode: 'percent', values: { [ME]: 50, [PRIYA]: 40 } },
+    })
+    const solo = expense({ id: 'e_solo', split: { mode: 'equal', participants: [ME] } })
+
+    const view = buildGroupDues([deleted, broken, solo], { memberIds: [ME, PRIYA] })
+
+    expect(view.pairs).toEqual([])
+    expect(view.totalPaise).toBe(0)
+    expect(view.members.every((member) => member.owesPaise === 0 && member.owedByPaise === 0)).toBe(
+      true,
+    )
+  })
+
+  it('does not mutate the expenses it was given', () => {
+    const input = [expense(), expense({ id: 'e_two', amountPaise: 50_000 })]
+    const before = structuredClone(input)
+
+    buildGroupDues(input, { memberIds: [ME, PRIYA] })
+
+    expect(input).toEqual(before)
+  })
+
+  it('returns an empty view with no expenses or members', () => {
+    expect(buildGroupDues([])).toEqual({
+      members: [],
+      pairs: [],
+      totalPaise: 0,
+      pairCount: 0,
       expenseCount: 0,
     })
   })

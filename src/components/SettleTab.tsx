@@ -3,6 +3,7 @@ import type { Expense, Group, MemberId, Settlement, SettlementStatus } from '../
 import { formatPaise, parseRupees } from '../lib/money'
 import { useStore } from '../lib/store'
 import { PaybackCard } from './PaybackCard'
+import { GroupDuesCard } from './GroupDuesCard'
 import { Sheet, StatusPill } from './ui'
 import { IconArrowRight, IconCheck, IconClock } from './Icons'
 
@@ -46,6 +47,7 @@ export function SettleTab({
   const member = (id: string) => group.members.find((m) => m.id === id)
   const activeSettlements = [...settlements].sort((a, b) => b.updatedAt - a.updatedAt)
   const closed = group.status === 'closed'
+  const activeMemberIds = group.members.filter((m) => !m.leftAt).map((m) => m.id)
 
   return (
     <div className="settle-tab">
@@ -54,6 +56,7 @@ export function SettleTab({
         settlements={settlements}
         groupName={group.name}
         currentMemberId={currentMemberId}
+        memberIds={activeMemberIds}
         nameOf={name}
         colorOf={(id) => member(id)?.color ?? 0}
         upiOf={(id) => member(id)?.upiId}
@@ -61,6 +64,14 @@ export function SettleTab({
           setPaying({ from: transfer.from, to: transfer.to, amount: transfer.amountPaise })
         }
         closed={closed}
+      />
+
+      <GroupDuesCard
+        expenses={expenses}
+        memberIds={activeMemberIds}
+        meId={currentMemberId}
+        nameOf={name}
+        colorOf={(id) => member(id)?.color ?? 0}
       />
 
       <div className="section-head section-head--tight">
