@@ -2053,7 +2053,9 @@ h3 {
   vertical-align: middle;
 }
 
-.dues-table__name em {
+.dues-table__name em,
+.send-person__name em,
+.gets-row__name em {
   margin-left: 5px;
   background: rgba(143, 211, 174, 0.14);
   border-radius: 999px;
@@ -2125,6 +2127,203 @@ h3 {
   color: rgba(244, 239, 227, 0.5);
   font-size: 11px;
   line-height: 1.5;
+}
+
+/* ---------- what each person pays ---------- */
+
+.send-card {
+  margin-top: 10px;
+}
+
+.send-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.send-person {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(244, 239, 227, 0.12);
+  border-radius: 999px;
+  color: rgba(244, 239, 227, 0.8);
+  font-size: 11.5px;
+  font-weight: 600;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.send-person:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.send-person.is-active {
+  background: rgba(227, 163, 59, 0.16);
+  border-color: rgba(227, 163, 59, 0.45);
+  color: #f4efe3;
+}
+
+.send-person__amount {
+  color: #ffb3a0;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.send-person.is-clear .send-person__amount {
+  color: rgba(244, 239, 227, 0.32);
+}
+
+.send-line {
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(244, 239, 227, 0.08);
+}
+
+.send-line:last-of-type {
+  border-bottom: 0;
+  padding-bottom: 2px;
+}
+
+.send-line__main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: rgba(244, 239, 227, 0.9);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.send-line__main > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.send-line__amount {
+  flex: 0 0 auto;
+  color: #ffb3a0;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.send-line__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 7px;
+}
+
+.send-line__why {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid rgba(244, 239, 227, 0.18);
+  border-radius: 999px;
+  color: rgba(244, 239, 227, 0.62);
+  font-size: 10.5px;
+  font-weight: 700;
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.send-line__why:hover {
+  color: #f4efe3;
+  border-color: rgba(244, 239, 227, 0.3);
+}
+
+.send-line__why svg {
+  transition: transform 160ms ease;
+}
+
+.send-line.is-open .send-line__why {
+  background: rgba(227, 163, 59, 0.14);
+  border-color: rgba(227, 163, 59, 0.42);
+  color: #f0c477;
+}
+
+.send-line.is-open .send-line__why svg {
+  transform: rotate(90deg);
+}
+
+.send-line__why-body {
+  margin-top: 9px;
+  padding: 9px 11px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(244, 239, 227, 0.08);
+  border-radius: 12px;
+}
+
+/* ---------- what everyone gets ---------- */
+
+.gets-card {
+  margin-top: 10px;
+}
+
+.gets-row {
+  border-bottom: 1px solid rgba(244, 239, 227, 0.08);
+}
+
+.gets-row:last-of-type {
+  border-bottom: 0;
+}
+
+.gets-row__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 2px;
+  text-align: left;
+}
+
+.gets-row__head:hover .gets-row__name {
+  color: #fff;
+}
+
+.gets-row__id {
+  flex: 1;
+  min-width: 0;
+}
+
+.gets-row__name {
+  display: block;
+  color: #f4efe3;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.gets-row__meta {
+  display: block;
+  margin-top: 2px;
+  color: rgba(244, 239, 227, 0.5);
+  font-size: 10.5px;
+}
+
+.gets-row__amount {
+  color: #a9e3c2;
+  font-family: var(--font-display);
+  font-size: 15.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.gets-row__chev {
+  color: rgba(244, 239, 227, 0.35);
+  transition: transform 160ms ease;
+}
+
+.gets-row.is-open .gets-row__chev {
+  transform: rotate(90deg);
+}
+
+.gets-row__body {
+  padding: 0 2px 8px 40px;
 }
 
 .settlement-list {

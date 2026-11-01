@@ -3,6 +3,8 @@ import type { Expense, Group, MemberId, Settlement, SettlementStatus } from '../
 import { formatPaise, parseRupees } from '../lib/money'
 import { useStore } from '../lib/store'
 import { PaybackCard } from './PaybackCard'
+import { SendListCard } from './SendListCard'
+import { ReceivesCard } from './ReceivesCard'
 import { GroupDuesCard } from './GroupDuesCard'
 import { Sheet, StatusPill } from './ui'
 import { IconArrowRight, IconCheck, IconClock } from './Icons'
@@ -64,6 +66,24 @@ export function SettleTab({
           setPaying({ from: transfer.from, to: transfer.to, amount: transfer.amountPaise })
         }
         closed={closed}
+      />
+
+      <SendListCard
+        expenses={expenses}
+        memberIds={activeMemberIds}
+        meId={currentMemberId}
+        groupName={group.name}
+        nameOf={name}
+        colorOf={(id) => member(id)?.color ?? 0}
+        upiOf={(id) => member(id)?.upiId}
+      />
+
+      <ReceivesCard
+        expenses={expenses}
+        memberIds={activeMemberIds}
+        meId={currentMemberId}
+        nameOf={name}
+        colorOf={(id) => member(id)?.color ?? 0}
       />
 
       <GroupDuesCard

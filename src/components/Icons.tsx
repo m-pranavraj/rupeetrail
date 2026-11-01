@@ -171,4 +171,19 @@ export const IconMap = (p: IconProps) => (
     <path d="M8 4l4 4-4 4" />
     <circle cx="12" cy="12" r="2" />
   </svg>
+)
+
+export const IconSend = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M21.5 2.5L11 13" />
+    <path d="M21.5 2.5l-6.5 19-4-9-9-4z" />
+  </svg>
+)
+
+export const IconWallet = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M21 8.5H5.5a2.5 2.5 0 010-5H19v5" />
+    <path d="M3 3.5v15a2 2 0 002 2h16V8.5" />
+    <circle cx="17" cy="13.5" r="1.3" />
+  </svg>
 )

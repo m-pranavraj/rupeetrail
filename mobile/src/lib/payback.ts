@@ -85,6 +85,8 @@ export interface DuesPair {
   toId: MemberId
   amountPaise: number
   expenseCount: number
+  /** The expenses that add up to amountPaise, newest first. */
+  lines: PaybackLine[]
 }
 
 export interface DuesEdge {
@@ -92,6 +94,7 @@ export interface DuesEdge {
   memberId: MemberId
   amountPaise: number
   expenseCount: number
+  lines: PaybackLine[]
 }
 
 export interface DuesMember {
@@ -312,6 +315,7 @@ export function buildGroupDues(
     toId: MemberId
     amountPaise: number
     expenseIds: Set<ExpenseId>
+    lines: PaybackLine[]
   }
 
   const byPair = new Map<string, PairAccumulator>()
@@ -320,16 +324,24 @@ export function buildGroupDues(
 
   forEachExpenseDebt(expenses, (debt) => {
     const key = pairKey(debt.fromId, debt.toId)
+    const line: PaybackLine = {
+      expenseId: debt.expenseId,
+      description: debt.description,
+      date: debt.date,
+      amountPaise: debt.amountPaise,
+    }
     const existing = byPair.get(key)
     if (existing) {
       existing.amountPaise += debt.amountPaise
       existing.expenseIds.add(debt.expenseId)
+      existing.lines.push(line)
     } else {
       byPair.set(key, {
         fromId: debt.fromId,
         toId: debt.toId,
         amountPaise: debt.amountPaise,
         expenseIds: new Set([debt.expenseId]),
+        lines: [line],
       })
     }
     allExpenseIds.add(debt.expenseId)
@@ -341,6 +353,9 @@ export function buildGroupDues(
       toId: pair.toId,
       amountPaise: pair.amountPaise,
       expenseCount: pair.expenseIds.size,
+      lines: pair.lines.sort(
+        (a, b) => b.date - a.date || a.expenseId.localeCompare(b.expenseId),
+      ),
     }))
     .sort(
       (a, b) =>
@@ -375,11 +390,13 @@ export function buildGroupDues(
       memberId: pair.toId,
       amountPaise: pair.amountPaise,
       expenseCount: pair.expenseCount,
+      lines: pair.lines,
     })
     to.owedBy.push({
       memberId: pair.fromId,
       amountPaise: pair.amountPaise,
       expenseCount: pair.expenseCount,
+      lines: pair.lines,
     })
     from.owesPaise += pair.amountPaise
     to.owedByPaise += pair.amountPaise

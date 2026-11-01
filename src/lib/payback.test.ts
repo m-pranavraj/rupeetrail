@@ -272,9 +272,11 @@ describe('buildGroupDues', () => {
 
     const view = buildGroupDues([dinner, cab], { memberIds: [ME, PRIYA, RAVI, NEHA] })
 
-    expect(view.pairs).toEqual([
-      { fromId: PRIYA, toId: ME, amountPaise: 50_000, expenseCount: 1 },
-      { fromId: NEHA, toId: RAVI, amountPaise: 15_000, expenseCount: 1 },
+    expect(
+      view.pairs.map((pair) => [pair.fromId, pair.toId, pair.amountPaise, pair.expenseCount]),
+    ).toEqual([
+      [PRIYA, ME, 50_000, 1],
+      [NEHA, RAVI, 15_000, 1],
     ])
     expect(view.totalPaise).toBe(65_000)
     expect(view.pairCount).toBe(2)
@@ -283,7 +285,9 @@ describe('buildGroupDues', () => {
     const priya = view.members.find((member) => member.memberId === PRIYA)!
     expect(priya.owesPaise).toBe(50_000)
     expect(priya.owedByPaise).toBe(0)
-    expect(priya.owes).toEqual([{ memberId: ME, amountPaise: 50_000, expenseCount: 1 }])
+    expect(priya.owes.map((edge) => [edge.memberId, edge.amountPaise, edge.expenseCount])).toEqual([
+      [ME, 50_000, 1],
+    ])
   })
 
   it('attributes each share across multiple payers', () => {
@@ -299,9 +303,11 @@ describe('buildGroupDues', () => {
 
     const view = buildGroupDues([shared])
 
-    expect(view.pairs).toEqual([
-      { fromId: PRIYA, toId: ME, amountPaise: 30_000, expenseCount: 1 },
-      { fromId: ME, toId: PRIYA, amountPaise: 20_000, expenseCount: 1 },
+    expect(
+      view.pairs.map((pair) => [pair.fromId, pair.toId, pair.amountPaise, pair.expenseCount]),
+    ).toEqual([
+      [PRIYA, ME, 30_000, 1],
+      [ME, PRIYA, 20_000, 1],
     ])
     expect(view.totalPaise).toBe(50_000)
   })
@@ -312,10 +318,32 @@ describe('buildGroupDues', () => {
 
     const view = buildGroupDues([first, second])
 
-    expect(view.pairs).toEqual([
-      { fromId: PRIYA, toId: ME, amountPaise: 80_000, expenseCount: 2 },
-    ])
+    expect(
+      view.pairs.map((pair) => [pair.fromId, pair.toId, pair.amountPaise, pair.expenseCount]),
+    ).toEqual([[PRIYA, ME, 80_000, 2]])
     expect(view.expenseCount).toBe(2)
+  })
+
+  it('carries the expense lines behind a pair so a payment can explain itself', () => {
+    const dinner = expense({ id: 'e_dinner', description: 'Dinner', amountPaise: 1_00_000 })
+    const cab = expense({ id: 'e_cab', description: 'Cab', amountPaise: 60_000 })
+
+    const view = buildGroupDues([dinner, cab])
+    const due = view.pairs.find((pair) => pair.fromId === PRIYA)!
+
+    expect(due.toId).toBe(ME)
+    expect(due.amountPaise).toBe(80_000)
+    expect(due.lines.map((line) => [line.expenseId, line.description, line.amountPaise])).toEqual([
+      ['e_cab', 'Cab', 30_000],
+      ['e_dinner', 'Dinner', 50_000],
+    ])
+    expect(due.lines.reduce((sum, line) => sum + line.amountPaise, 0)).toBe(due.amountPaise)
+
+    const priya = view.members.find((member) => member.memberId === PRIYA)!
+    expect(priya.owes[0].lines).toEqual(due.lines)
+
+    const receiver = view.members.find((member) => member.memberId === ME)!
+    expect(receiver.owedBy[0].lines).toEqual(due.lines)
   })
 
   it('includes every member, even people with nothing pending', () => {

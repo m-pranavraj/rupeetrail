@@ -42,6 +42,8 @@ import {
 } from '../components/ui'
 import { TripMap, type MapPoint } from '../components/TripMap'
 import { PaybackCard } from '../components/PaybackCard'
+import { SendListCard } from '../components/SendListCard'
+import { ReceivesCard } from '../components/ReceivesCard'
 import { GroupDuesCard } from '../components/GroupDuesCard'
 import { ExpenseForm } from '../components/ExpenseForm'
 import { ExpenseDetail } from '../components/ExpenseDetail'
@@ -805,6 +807,25 @@ export function GroupScreen() {
               payingKey={payingKey}
               closed={group.status === 'closed'}
               onNotify={notify}
+            />
+
+            <SendListCard
+              expenses={expenses}
+              memberIds={activeMemberIds}
+              meId={me.id}
+              groupName={group.name}
+              nameOf={(id) => nameOf(group, id)}
+              colorOf={(id) => group.members.find((entry) => entry.id === id)?.color ?? 0}
+              upiOf={(id) => activeMembers.find((entry) => entry.id === id)?.upiId}
+              onPayUpi={(toId, amountPaise) => void payViaUpi(toId, amountPaise)}
+            />
+
+            <ReceivesCard
+              expenses={expenses}
+              memberIds={activeMemberIds}
+              meId={me.id}
+              nameOf={(id) => nameOf(group, id)}
+              colorOf={(id) => group.members.find((entry) => entry.id === id)?.color ?? 0}
             />
 
             <GroupDuesCard

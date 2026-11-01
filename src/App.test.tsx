@@ -496,6 +496,68 @@ describe('shared groups', () => {
     expect((within(dialog).getByLabelText('From (payer)') as HTMLSelectElement).value).toBe(RAVI)
     expect((within(dialog).getByLabelText('To (receiver)') as HTMLSelectElement).value).toBe(PRIYA)
   })
+
+  it('lists only what each person pays and totals what everyone gets', async () => {
+    const RAVI = 'm_ravi'
+    const snapshot = baseSnapshot()
+    snapshot.group.members.push({
+      id: RAVI,
+      name: 'Ravi',
+      color: 2,
+      joinedAt: Date.now() - 1000,
+    })
+    snapshot.expenses = [
+      {
+        ...snapshot.expenses[0],
+        payers: [{ memberId: PRIYA, amountPaise: 100000 }],
+      },
+      {
+        ...snapshot.expenses[0],
+        id: 'e_cab',
+        description: 'Cab',
+        amountPaise: 30000,
+        date: Date.now() - 1800000,
+        payers: [{ memberId: ME, amountPaise: 30000 }],
+        split: { mode: 'equal', participants: [ME, RAVI] },
+      },
+    ]
+    server = snapshot
+    seedDevice(snapshot)
+    const user = userEvent.setup()
+    renderApp()
+
+    await user.click(await screen.findByText('Goa plan'))
+    await user.click(await screen.findByRole('tab', { name: 'Settle' }))
+
+    // The send list opens on you and shows only money leaving.
+    expect(await screen.findByText('What each person pays')).toBeTruthy()
+    expect(screen.getByText('You pay 1 person')).toBeTruthy()
+    expect(screen.getByText('for you to pay')).toBeTruthy()
+    expect(screen.getByText('Pay Priya')).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: /why ₹500/i }))
+    expect(await screen.findByText('From these expenses')).toBeTruthy()
+    expect(screen.getByText(/Dinner/)).toBeTruthy()
+
+    // Someone who pays nobody gets no row for the money coming to them.
+    await user.click(screen.getByRole('button', { name: /Show payments Priya makes/i }))
+    expect(await screen.findByText('Priya has nothing to pay anyone.')).toBeTruthy()
+    expect(screen.getByText('nothing to pay')).toBeTruthy()
+    // Arjun's own ₹150 collection stays out of Priya's send list.
+    expect(screen.queryByText(/Cab/)).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: /Show payments Ravi makes/i }))
+    expect(await screen.findByText('Ravi pays Arjun')).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: /Show your payments/i }))
+    expect(await screen.findByText('Pay Priya')).toBeTruthy()
+
+    // One place for every incoming total, with the payers one tap away.
+    expect(screen.getByText('What everyone gets')).toBeTruthy()
+    expect(screen.getByText('2 people collecting')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: /Priya gets ₹500/i }))
+    expect(await screen.findByText(/From Arjun/)).toBeTruthy()
+  })
 })
 
 describe('invite links', () => {
